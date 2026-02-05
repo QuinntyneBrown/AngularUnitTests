@@ -278,7 +278,9 @@ public class JestTestGeneratorService : IJestTestGeneratorService
         sb.AppendLine($"  }});");
         sb.AppendLine();
         sb.AppendLine($"  it('should allow activation', () => {{");
-        sb.AppendLine($"    const result = guard.canActivate();");
+        sb.AppendLine($"    const mockRoute: any = {{ snapshot: {{}} }};");
+        sb.AppendLine($"    const mockState: any = {{ url: '/test' }};");
+        sb.AppendLine($"    const result = guard.canActivate(mockRoute, mockState);");
         sb.AppendLine($"    expect(result).toBeDefined();");
         sb.AppendLine($"  }});");
         sb.AppendLine();
@@ -373,7 +375,9 @@ public class JestTestGeneratorService : IJestTestGeneratorService
         sb.AppendLine($"  }});");
         sb.AppendLine();
         sb.AppendLine($"  it('should resolve data', async () => {{");
-        sb.AppendLine($"    const result = await resolver.resolve();");
+        sb.AppendLine($"    const mockRoute: any = {{ snapshot: {{}} }};");
+        sb.AppendLine($"    const mockState: any = {{ url: '/test' }};");
+        sb.AppendLine($"    const result = await resolver.resolve(mockRoute, mockState);");
         sb.AppendLine($"    expect(result).toBeDefined();");
         sb.AppendLine($"  }});");
         sb.AppendLine();

@@ -133,7 +133,10 @@ public class TypeScriptFileDiscoveryService : ITypeScriptFileDiscoveryService
         // Convert kebab-case to PascalCase
         var parts = fileName.Split(new[] { '-', '.' }, StringSplitOptions.RemoveEmptyEntries);
         var className = string.Join("", parts.Select(p =>
-            char.ToUpper(p[0]) + p.Substring(1).ToLower()));
+        {
+            if (string.IsNullOrEmpty(p)) return string.Empty;
+            return char.ToUpper(p[0]) + (p.Length > 1 ? p.Substring(1).ToLower() : string.Empty);
+        }));
 
         return className;
     }
