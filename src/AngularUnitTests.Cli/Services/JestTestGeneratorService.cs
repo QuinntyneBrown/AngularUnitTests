@@ -246,10 +246,14 @@ public class JestTestGeneratorService : IJestTestGeneratorService
         sb.AppendLine("    expect(service).toBeTruthy();");
         sb.AppendLine("  });");
 
-        // Generate tests for each public method
+        // Generate tests for each public method that returns Observable
         if (needsHttp && fileInfo.PublicMethods.Any())
         {
-            foreach (var method in fileInfo.PublicMethods)
+            var httpMethods = fileInfo.PublicMethods
+                .Where(m => m.ReturnType.Contains("Observable"))
+                .ToList();
+
+            foreach (var method in httpMethods)
             {
                 sb.AppendLine();
                 GenerateHttpMethodTest(sb, method, className);
@@ -268,7 +272,11 @@ public class JestTestGeneratorService : IJestTestGeneratorService
         var isPostMethod = methodName.StartsWith("create") || methodName.StartsWith("Create") ||
                           methodName.StartsWith("add") || methodName.StartsWith("Add") ||
                           methodName.StartsWith("archive") || methodName.StartsWith("Archive") ||
-                          methodName.StartsWith("restore") || methodName.StartsWith("Restore");
+                          methodName.StartsWith("restore") || methodName.StartsWith("Restore") ||
+                          methodName.StartsWith("login") || methodName.StartsWith("Login") ||
+                          methodName.StartsWith("logout") || methodName.StartsWith("Logout") ||
+                          methodName.StartsWith("register") || methodName.StartsWith("Register") ||
+                          methodName.StartsWith("refresh") || methodName.StartsWith("Refresh");
         var isPutMethod = methodName.StartsWith("update") || methodName.StartsWith("Update");
         var isDeleteMethod = methodName.StartsWith("delete") || methodName.StartsWith("Delete") ||
                             methodName.StartsWith("remove") || methodName.StartsWith("Remove");
@@ -293,13 +301,8 @@ public class JestTestGeneratorService : IJestTestGeneratorService
         // Generate the test
         sb.AppendLine($"      const mockResponse = {{}};");
         sb.AppendLine();
-        sb.AppendLine($"      service.{methodName}({paramsCall}).subscribe({{");
-        sb.AppendLine("        next: (response) => {");
-        sb.AppendLine("          expect(response).toBeDefined();");
-        sb.AppendLine("        },");
-        sb.AppendLine("        error: () => {");
-        sb.AppendLine("          fail('Should not error');");
-        sb.AppendLine("        },");
+        sb.AppendLine($"      service.{methodName}({paramsCall}).subscribe((response) => {{");
+        sb.AppendLine("        expect(response).toBeDefined();");
         sb.AppendLine("      });");
         sb.AppendLine();
         sb.AppendLine($"      const req = httpMock.expectOne((request) => request.method === '{httpMethod}');");
@@ -312,6 +315,7 @@ public class JestTestGeneratorService : IJestTestGeneratorService
     {
         // Generate appropriate mock values based on parameter type
         var normalizedType = type.Trim().ToLowerInvariant();
+        var normalizedName = paramName.ToLowerInvariant();
 
         if (normalizedType == "string")
             return "'test-value'";
@@ -319,11 +323,22 @@ public class JestTestGeneratorService : IJestTestGeneratorService
             return "1";
         if (normalizedType == "boolean")
             return "true";
-        if (paramName.ToLowerInvariant().Contains("id"))
+        if (normalizedName.Contains("id") && normalizedType == "string")
             return "'test-id'";
 
-        // For complex types, return an empty object
-        return "{}";
+        // For params/request types, use 'any' cast to avoid import issues
+        if (type.EndsWith("Params"))
+        {
+            return "{ userId: 'test-user' } as any";
+        }
+
+        if (type.EndsWith("Request"))
+        {
+            return "{} as any";
+        }
+
+        // For complex types, return an empty object with any cast
+        return "{} as any";
     }
 
     private string DetermineApiConfigPath(string filePath)
