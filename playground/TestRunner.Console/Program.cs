@@ -232,7 +232,7 @@ class Program
         }
 
         // For Angular 18+ with @angular/build:unit-test (uses Vitest internally)
-        // The ng test command runs tests without extra flags
+        // The ng test command runs tests properly with Angular's vitest setup
         System.Console.WriteLine("Using Angular CLI test runner with Vitest...");
         return await RunProcessAsync("npx", "ng test --watch=false", uiDir);
     }
