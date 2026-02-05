@@ -8,7 +8,7 @@ namespace AngularUnitTests.Cli.Services;
 
 public interface IJestTestGeneratorService
 {
-    Task<string> GenerateTestFileAsync(TypeScriptFileInfo fileInfo, CancellationToken cancellationToken = default);
+    Task<string?> GenerateTestFileAsync(TypeScriptFileInfo fileInfo, CancellationToken cancellationToken = default);
 }
 
 public class JestTestGeneratorService : IJestTestGeneratorService
@@ -24,14 +24,27 @@ public class JestTestGeneratorService : IJestTestGeneratorService
         _options = options.Value;
     }
 
-    public async Task<string> GenerateTestFileAsync(
+    public async Task<string?> GenerateTestFileAsync(
         TypeScriptFileInfo fileInfo,
         CancellationToken cancellationToken = default)
     {
         _logger.LogInformation("Generating test for: {FilePath}", fileInfo.FilePath);
 
+        // Skip interface/type-only model files
+        if (fileInfo.FileType == TypeScriptFileType.Model && fileInfo.IsInterfaceOrType)
+        {
+            _logger.LogInformation("Skipping interface/type-only file: {FilePath}", fileInfo.FilePath);
+            return null;
+        }
+
         var testFilePath = DetermineTestFilePath(fileInfo);
         var testContent = await GenerateTestContentAsync(fileInfo, cancellationToken);
+
+        if (string.IsNullOrEmpty(testContent))
+        {
+            _logger.LogInformation("No test content generated for: {FilePath}", fileInfo.FilePath);
+            return null;
+        }
 
         await File.WriteAllTextAsync(testFilePath, testContent, cancellationToken);
 
@@ -60,379 +73,590 @@ public class JestTestGeneratorService : IJestTestGeneratorService
     {
         return fileInfo.FileType switch
         {
-            TypeScriptFileType.Component => await GenerateComponentTestAsync(fileInfo, cancellationToken),
-            TypeScriptFileType.Service => await GenerateServiceTestAsync(fileInfo, cancellationToken),
-            TypeScriptFileType.Directive => await GenerateDirectiveTestAsync(fileInfo, cancellationToken),
-            TypeScriptFileType.Pipe => await GeneratePipeTestAsync(fileInfo, cancellationToken),
-            TypeScriptFileType.Guard => await GenerateGuardTestAsync(fileInfo, cancellationToken),
-            TypeScriptFileType.Interceptor => await GenerateInterceptorTestAsync(fileInfo, cancellationToken),
-            TypeScriptFileType.Resolver => await GenerateResolverTestAsync(fileInfo, cancellationToken),
-            _ => await GenerateGenericTestAsync(fileInfo, cancellationToken)
+            TypeScriptFileType.Component => GenerateComponentTest(fileInfo),
+            TypeScriptFileType.Service => GenerateServiceTest(fileInfo),
+            TypeScriptFileType.Directive => GenerateDirectiveTest(fileInfo),
+            TypeScriptFileType.Pipe => GeneratePipeTest(fileInfo),
+            TypeScriptFileType.Guard => GenerateGuardTest(fileInfo),
+            TypeScriptFileType.Interceptor => GenerateInterceptorTest(fileInfo),
+            TypeScriptFileType.Resolver => GenerateResolverTest(fileInfo),
+            TypeScriptFileType.Model => GenerateModelTest(fileInfo),
+            _ => GenerateGenericTest(fileInfo)
         };
     }
 
-    private async Task<string> GenerateComponentTestAsync(TypeScriptFileInfo fileInfo, CancellationToken cancellationToken)
+    private string GenerateComponentTest(TypeScriptFileInfo fileInfo)
     {
         var sb = new StringBuilder();
-        var relativePath = $"./{Path.GetFileName(fileInfo.FilePath)}";
+        var relativePath = $"./{Path.GetFileName(fileInfo.FilePath)}".Replace(".ts", "");
+        var className = fileInfo.ClassName;
 
-        sb.AppendLine($"import {{ ComponentFixture, TestBed }} from '@angular/core/testing';");
-        sb.AppendLine($"import {{ {fileInfo.ClassName} }} from '{relativePath.Replace(".ts", "")}';");
-        sb.AppendLine();
-        sb.AppendLine($"describe('{fileInfo.ClassName}', () => {{");
-        sb.AppendLine($"  let component: {fileInfo.ClassName};");
-        sb.AppendLine($"  let fixture: ComponentFixture<{fileInfo.ClassName}>;");
-        sb.AppendLine();
-        sb.AppendLine($"  beforeEach(async () => {{");
-        sb.AppendLine($"    await TestBed.configureTestingModule({{");
-        sb.AppendLine($"      declarations: [{fileInfo.ClassName}]");
-        sb.AppendLine($"    }}).compileComponents();");
-        sb.AppendLine();
-        sb.AppendLine($"    fixture = TestBed.createComponent({fileInfo.ClassName});");
-        sb.AppendLine($"    component = fixture.componentInstance;");
-        sb.AppendLine($"    fixture.detectChanges();");
-        sb.AppendLine($"  }});");
-        sb.AppendLine();
-        sb.AppendLine($"  it('should create', () => {{");
-        sb.AppendLine($"    expect(component).toBeTruthy();");
-        sb.AppendLine($"  }});");
-        sb.AppendLine();
-        sb.AppendLine($"  it('should render component', () => {{");
-        sb.AppendLine($"    expect(fixture.nativeElement).toBeTruthy();");
-        sb.AppendLine($"  }});");
-        sb.AppendLine();
-        sb.AppendLine($"  it('should have correct initial state', () => {{");
-        sb.AppendLine($"    expect(component).toMatchSnapshot();");
-        sb.AppendLine($"  }});");
-        sb.AppendLine();
-        sb.AppendLine($"  it('should handle lifecycle hooks', () => {{");
-        sb.AppendLine($"    const ngOnInitSpy = jest.spyOn(component, 'ngOnInit');");
-        sb.AppendLine($"    component.ngOnInit();");
-        sb.AppendLine($"    expect(ngOnInitSpy).toHaveBeenCalled();");
-        sb.AppendLine($"  }});");
-        sb.AppendLine();
-        sb.AppendLine($"  it('should handle change detection', () => {{");
-        sb.AppendLine($"    fixture.detectChanges();");
-        sb.AppendLine($"    expect(fixture.nativeElement).toMatchSnapshot();");
-        sb.AppendLine($"  }});");
-        sb.AppendLine($"}});");
+        sb.AppendLine("import { ComponentFixture, TestBed } from '@angular/core/testing';");
 
-        return await Task.FromResult(sb.ToString());
+        // Add provider mocking if needed
+        if (fileInfo.Dependencies.Any())
+        {
+            sb.AppendLine("import { provideHttpClient } from '@angular/common/http';");
+            sb.AppendLine("import { provideHttpClientTesting } from '@angular/common/http/testing';");
+            if (fileInfo.Dependencies.Contains("Router"))
+            {
+                sb.AppendLine("import { provideRouter } from '@angular/router';");
+            }
+        }
+
+        sb.AppendLine($"import {{ {className} }} from '{relativePath}';");
+        sb.AppendLine();
+        sb.AppendLine($"describe('{className}', () => {{");
+        sb.AppendLine($"  let component: {className};");
+        sb.AppendLine($"  let fixture: ComponentFixture<{className}>;");
+        sb.AppendLine();
+        sb.AppendLine("  beforeEach(async () => {");
+        sb.AppendLine("    await TestBed.configureTestingModule({");
+
+        if (fileInfo.IsStandalone)
+        {
+            sb.AppendLine($"      imports: [{className}],");
+        }
+        else
+        {
+            sb.AppendLine($"      declarations: [{className}],");
+        }
+
+        if (fileInfo.Dependencies.Any())
+        {
+            sb.AppendLine("      providers: [");
+            sb.AppendLine("        provideHttpClient(),");
+            sb.AppendLine("        provideHttpClientTesting(),");
+            if (fileInfo.Dependencies.Contains("Router"))
+            {
+                sb.AppendLine("        provideRouter([]),");
+            }
+            sb.AppendLine("      ],");
+        }
+
+        sb.AppendLine("    }).compileComponents();");
+        sb.AppendLine();
+        sb.AppendLine($"    fixture = TestBed.createComponent({className});");
+        sb.AppendLine("    component = fixture.componentInstance;");
+        sb.AppendLine("    fixture.detectChanges();");
+        sb.AppendLine("  });");
+        sb.AppendLine();
+        sb.AppendLine("  it('should create', () => {");
+        sb.AppendLine("    expect(component).toBeTruthy();");
+        sb.AppendLine("  });");
+        sb.AppendLine();
+        sb.AppendLine("  it('should render component', () => {");
+        sb.AppendLine("    expect(fixture.nativeElement).toBeTruthy();");
+        sb.AppendLine("  });");
+        sb.AppendLine("});");
+
+        return sb.ToString();
     }
 
-    private async Task<string> GenerateServiceTestAsync(TypeScriptFileInfo fileInfo, CancellationToken cancellationToken)
+    private string GenerateServiceTest(TypeScriptFileInfo fileInfo)
     {
         var sb = new StringBuilder();
-        var relativePath = $"./{Path.GetFileName(fileInfo.FilePath)}";
+        var relativePath = $"./{Path.GetFileName(fileInfo.FilePath)}".Replace(".ts", "");
+        var className = fileInfo.ClassName;
 
-        sb.AppendLine($"import {{ TestBed }} from '@angular/core/testing';");
-        sb.AppendLine($"import {{ {fileInfo.ClassName} }} from '{relativePath.Replace(".ts", "")}';");
-        sb.AppendLine();
-        sb.AppendLine($"describe('{fileInfo.ClassName}', () => {{");
-        sb.AppendLine($"  let service: {fileInfo.ClassName};");
-        sb.AppendLine();
-        sb.AppendLine($"  beforeEach(() => {{");
-        sb.AppendLine($"    TestBed.configureTestingModule({{");
-        sb.AppendLine($"      providers: [{fileInfo.ClassName}]");
-        sb.AppendLine($"    }});");
-        sb.AppendLine($"    service = TestBed.inject({fileInfo.ClassName});");
-        sb.AppendLine($"  }});");
-        sb.AppendLine();
-        sb.AppendLine($"  it('should be created', () => {{");
-        sb.AppendLine($"    expect(service).toBeTruthy();");
-        sb.AppendLine($"  }});");
-        sb.AppendLine();
-        sb.AppendLine($"  it('should have correct initial state', () => {{");
-        sb.AppendLine($"    expect(service).toBeDefined();");
-        sb.AppendLine($"  }});");
-        sb.AppendLine();
-        sb.AppendLine($"  it('should handle method calls', () => {{");
-        sb.AppendLine($"    // Test service methods here");
-        sb.AppendLine($"    expect(service).toMatchSnapshot();");
-        sb.AppendLine($"  }});");
-        sb.AppendLine();
-        sb.AppendLine($"  it('should handle errors gracefully', () => {{");
-        sb.AppendLine($"    // Test error handling");
-        sb.AppendLine($"    expect(service).toBeTruthy();");
-        sb.AppendLine($"  }});");
-        sb.AppendLine();
-        sb.AppendLine($"  it('should maintain state correctly', () => {{");
-        sb.AppendLine($"    // Test state management");
-        sb.AppendLine($"    expect(service).toBeTruthy();");
-        sb.AppendLine($"  }});");
-        sb.AppendLine($"}});");
+        sb.AppendLine("import { TestBed } from '@angular/core/testing';");
 
-        return await Task.FromResult(sb.ToString());
+        // Add HttpClient testing if needed
+        var needsHttp = fileInfo.Dependencies.Contains("HttpClient");
+        var needsRouter = fileInfo.Dependencies.Contains("Router");
+
+        if (needsHttp)
+        {
+            sb.AppendLine("import { provideHttpClient } from '@angular/common/http';");
+            sb.AppendLine("import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';");
+        }
+        if (needsRouter)
+        {
+            sb.AppendLine("import { provideRouter, Router } from '@angular/router';");
+        }
+
+        sb.AppendLine($"import {{ {className} }} from '{relativePath}';");
+        sb.AppendLine();
+        sb.AppendLine($"describe('{className}', () => {{");
+        sb.AppendLine($"  let service: {className};");
+
+        if (needsHttp)
+        {
+            sb.AppendLine("  let httpMock: HttpTestingController;");
+        }
+        if (needsRouter)
+        {
+            sb.AppendLine("  let router: Router;");
+        }
+
+        sb.AppendLine();
+        sb.AppendLine("  beforeEach(() => {");
+        sb.AppendLine("    TestBed.configureTestingModule({");
+        sb.AppendLine("      providers: [");
+        sb.AppendLine($"        {className},");
+
+        if (needsHttp)
+        {
+            sb.AppendLine("        provideHttpClient(),");
+            sb.AppendLine("        provideHttpClientTesting(),");
+        }
+        if (needsRouter)
+        {
+            sb.AppendLine("        provideRouter([]),");
+        }
+
+        // Handle API_BASE_URL injection token
+        if (fileInfo.Dependencies.Contains("API_BASE_URL"))
+        {
+            sb.AppendLine("        { provide: 'API_BASE_URL', useValue: 'http://localhost:3000' },");
+        }
+
+        sb.AppendLine("      ],");
+        sb.AppendLine("    });");
+        sb.AppendLine();
+        sb.AppendLine($"    service = TestBed.inject({className});");
+
+        if (needsHttp)
+        {
+            sb.AppendLine("    httpMock = TestBed.inject(HttpTestingController);");
+        }
+        if (needsRouter)
+        {
+            sb.AppendLine("    router = TestBed.inject(Router);");
+        }
+
+        sb.AppendLine("  });");
+        sb.AppendLine();
+
+        if (needsHttp)
+        {
+            sb.AppendLine("  afterEach(() => {");
+            sb.AppendLine("    httpMock.verify();");
+            sb.AppendLine("  });");
+            sb.AppendLine();
+        }
+
+        sb.AppendLine("  it('should be created', () => {");
+        sb.AppendLine("    expect(service).toBeTruthy();");
+        sb.AppendLine("  });");
+        sb.AppendLine("});");
+
+        return sb.ToString();
     }
 
-    private async Task<string> GenerateDirectiveTestAsync(TypeScriptFileInfo fileInfo, CancellationToken cancellationToken)
+    private string GenerateDirectiveTest(TypeScriptFileInfo fileInfo)
     {
         var sb = new StringBuilder();
-        var relativePath = $"./{Path.GetFileName(fileInfo.FilePath)}";
+        var relativePath = $"./{Path.GetFileName(fileInfo.FilePath)}".Replace(".ts", "");
+        var className = fileInfo.ClassName;
 
-        sb.AppendLine($"import {{ TestBed, ComponentFixture }} from '@angular/core/testing';");
-        sb.AppendLine($"import {{ Component }} from '@angular/core';");
-        sb.AppendLine($"import {{ {fileInfo.ClassName} }} from '{relativePath.Replace(".ts", "")}';");
+        sb.AppendLine("import { TestBed, ComponentFixture } from '@angular/core/testing';");
+        sb.AppendLine("import { Component } from '@angular/core';");
+        sb.AppendLine($"import {{ {className} }} from '{relativePath}';");
         sb.AppendLine();
-        sb.AppendLine($"@Component({{");
-        sb.AppendLine($"  template: '<div></div>'");
-        sb.AppendLine($"}})");
-        sb.AppendLine($"class TestComponent {{ }}");
+        sb.AppendLine("@Component({");
+        sb.AppendLine("  template: '<input type=\"text\" />',");
+        sb.AppendLine("  standalone: true,");
+        sb.AppendLine($"  imports: [{className}],");
+        sb.AppendLine("})");
+        sb.AppendLine("class TestHostComponent {}");
         sb.AppendLine();
-        sb.AppendLine($"describe('{fileInfo.ClassName}', () => {{");
-        sb.AppendLine($"  let fixture: ComponentFixture<TestComponent>;");
+        sb.AppendLine($"describe('{className}', () => {{");
+        sb.AppendLine("  let fixture: ComponentFixture<TestHostComponent>;");
         sb.AppendLine();
-        sb.AppendLine($"  beforeEach(() => {{");
-        sb.AppendLine($"    TestBed.configureTestingModule({{");
-        sb.AppendLine($"      declarations: [{fileInfo.ClassName}, TestComponent]");
-        sb.AppendLine($"    }});");
-        sb.AppendLine($"    fixture = TestBed.createComponent(TestComponent);");
-        sb.AppendLine($"  }});");
+        sb.AppendLine("  beforeEach(async () => {");
+        sb.AppendLine("    await TestBed.configureTestingModule({");
+        sb.AppendLine("      imports: [TestHostComponent],");
+        sb.AppendLine("    }).compileComponents();");
         sb.AppendLine();
-        sb.AppendLine($"  it('should create directive', () => {{");
-        sb.AppendLine($"    const directive = new {fileInfo.ClassName}();");
-        sb.AppendLine($"    expect(directive).toBeTruthy();");
-        sb.AppendLine($"  }});");
+        sb.AppendLine("    fixture = TestBed.createComponent(TestHostComponent);");
+        sb.AppendLine("    fixture.detectChanges();");
+        sb.AppendLine("  });");
         sb.AppendLine();
-        sb.AppendLine($"  it('should apply directive behavior', () => {{");
-        sb.AppendLine($"    fixture.detectChanges();");
-        sb.AppendLine($"    expect(fixture.nativeElement).toBeTruthy();");
-        sb.AppendLine($"  }});");
+        sb.AppendLine("  it('should create host component', () => {");
+        sb.AppendLine("    expect(fixture.componentInstance).toBeTruthy();");
+        sb.AppendLine("  });");
         sb.AppendLine();
-        sb.AppendLine($"  it('should handle events', () => {{");
-        sb.AppendLine($"    fixture.detectChanges();");
-        sb.AppendLine($"    expect(fixture.componentInstance).toBeTruthy();");
-        sb.AppendLine($"  }});");
-        sb.AppendLine();
-        sb.AppendLine($"  it('should update DOM correctly', () => {{");
-        sb.AppendLine($"    fixture.detectChanges();");
-        sb.AppendLine($"    expect(fixture.nativeElement).toMatchSnapshot();");
-        sb.AppendLine($"  }});");
-        sb.AppendLine($"}});");
+        sb.AppendLine("  it('should apply directive', () => {");
+        sb.AppendLine("    const input = fixture.nativeElement.querySelector('input');");
+        sb.AppendLine("    expect(input).toBeTruthy();");
+        sb.AppendLine("  });");
+        sb.AppendLine("});");
 
-        return await Task.FromResult(sb.ToString());
+        return sb.ToString();
     }
 
-    private async Task<string> GeneratePipeTestAsync(TypeScriptFileInfo fileInfo, CancellationToken cancellationToken)
+    private string GeneratePipeTest(TypeScriptFileInfo fileInfo)
     {
         var sb = new StringBuilder();
-        var relativePath = $"./{Path.GetFileName(fileInfo.FilePath)}";
+        var relativePath = $"./{Path.GetFileName(fileInfo.FilePath)}".Replace(".ts", "");
+        var className = fileInfo.ClassName;
 
-        sb.AppendLine($"import {{ {fileInfo.ClassName} }} from '{relativePath.Replace(".ts", "")}';");
+        sb.AppendLine($"import {{ {className} }} from '{relativePath}';");
         sb.AppendLine();
-        sb.AppendLine($"describe('{fileInfo.ClassName}', () => {{");
-        sb.AppendLine($"  let pipe: {fileInfo.ClassName};");
+        sb.AppendLine($"describe('{className}', () => {{");
+        sb.AppendLine($"  let pipe: {className};");
         sb.AppendLine();
-        sb.AppendLine($"  beforeEach(() => {{");
-        sb.AppendLine($"    pipe = new {fileInfo.ClassName}();");
-        sb.AppendLine($"  }});");
+        sb.AppendLine("  beforeEach(() => {");
+        sb.AppendLine($"    pipe = new {className}();");
+        sb.AppendLine("  });");
         sb.AppendLine();
-        sb.AppendLine($"  it('should create pipe', () => {{");
-        sb.AppendLine($"    expect(pipe).toBeTruthy();");
-        sb.AppendLine($"  }});");
+        sb.AppendLine("  it('should create pipe', () => {");
+        sb.AppendLine("    expect(pipe).toBeTruthy();");
+        sb.AppendLine("  });");
         sb.AppendLine();
-        sb.AppendLine($"  it('should transform value', () => {{");
-        sb.AppendLine($"    const result = pipe.transform('test');");
-        sb.AppendLine($"    expect(result).toBeDefined();");
-        sb.AppendLine($"  }});");
-        sb.AppendLine();
-        sb.AppendLine($"  it('should handle null values', () => {{");
-        sb.AppendLine($"    const result = pipe.transform(null);");
-        sb.AppendLine($"    expect(result).toBeDefined();");
-        sb.AppendLine($"  }});");
-        sb.AppendLine();
-        sb.AppendLine($"  it('should handle undefined values', () => {{");
-        sb.AppendLine($"    const result = pipe.transform(undefined);");
-        sb.AppendLine($"    expect(result).toBeDefined();");
-        sb.AppendLine($"  }});");
-        sb.AppendLine();
-        sb.AppendLine($"  it('should handle edge cases', () => {{");
-        sb.AppendLine($"    const result = pipe.transform('');");
-        sb.AppendLine($"    expect(result).toBeDefined();");
-        sb.AppendLine($"  }});");
-        sb.AppendLine($"}});");
+        sb.AppendLine("  it('should transform value', () => {");
+        sb.AppendLine("    const result = pipe.transform('test');");
+        sb.AppendLine("    expect(result).toBeDefined();");
+        sb.AppendLine("  });");
+        sb.AppendLine("});");
 
-        return await Task.FromResult(sb.ToString());
+        return sb.ToString();
     }
 
-    private async Task<string> GenerateGuardTestAsync(TypeScriptFileInfo fileInfo, CancellationToken cancellationToken)
+    private string GenerateGuardTest(TypeScriptFileInfo fileInfo)
     {
         var sb = new StringBuilder();
-        var relativePath = $"./{Path.GetFileName(fileInfo.FilePath)}";
+        var relativePath = $"./{Path.GetFileName(fileInfo.FilePath)}".Replace(".ts", "");
+        var exportName = fileInfo.ExportName;
 
-        sb.AppendLine($"import {{ TestBed }} from '@angular/core/testing';");
-        sb.AppendLine($"import {{ {fileInfo.ClassName} }} from '{relativePath.Replace(".ts", "")}';");
-        sb.AppendLine();
-        sb.AppendLine($"describe('{fileInfo.ClassName}', () => {{");
-        sb.AppendLine($"  let guard: {fileInfo.ClassName};");
-        sb.AppendLine();
-        sb.AppendLine($"  beforeEach(() => {{");
-        sb.AppendLine($"    TestBed.configureTestingModule({{");
-        sb.AppendLine($"      providers: [{fileInfo.ClassName}]");
-        sb.AppendLine($"    }});");
-        sb.AppendLine($"    guard = TestBed.inject({fileInfo.ClassName});");
-        sb.AppendLine($"  }});");
-        sb.AppendLine();
-        sb.AppendLine($"  it('should be created', () => {{");
-        sb.AppendLine($"    expect(guard).toBeTruthy();");
-        sb.AppendLine($"  }});");
-        sb.AppendLine();
-        sb.AppendLine($"  it('should allow activation', () => {{");
-        sb.AppendLine($"    const mockRoute: any = {{ snapshot: {{}} }};");
-        sb.AppendLine($"    const mockState: any = {{ url: '/test' }};");
-        sb.AppendLine($"    const result = guard.canActivate(mockRoute, mockState);");
-        sb.AppendLine($"    expect(result).toBeDefined();");
-        sb.AppendLine($"  }});");
-        sb.AppendLine();
-        sb.AppendLine($"  it('should prevent activation when unauthorized', () => {{");
-        sb.AppendLine($"    // Test authorization logic");
-        sb.AppendLine($"    expect(guard).toBeTruthy();");
-        sb.AppendLine($"  }});");
-        sb.AppendLine();
-        sb.AppendLine($"  it('should handle route parameters', () => {{");
-        sb.AppendLine($"    // Test route parameter handling");
-        sb.AppendLine($"    expect(guard).toBeTruthy();");
-        sb.AppendLine($"  }});");
-        sb.AppendLine();
-        sb.AppendLine($"  it('should redirect when necessary', () => {{");
-        sb.AppendLine($"    // Test redirection logic");
-        sb.AppendLine($"    expect(guard).toBeTruthy();");
-        sb.AppendLine($"  }});");
-        sb.AppendLine($"}});");
+        if (fileInfo.IsFunctional)
+        {
+            // Functional guard test using TestBed.runInInjectionContext
+            sb.AppendLine("import { TestBed } from '@angular/core/testing';");
+            sb.AppendLine("import { provideRouter, Router, ActivatedRouteSnapshot, RouterStateSnapshot } from '@angular/router';");
 
-        return await Task.FromResult(sb.ToString());
+            if (fileInfo.Dependencies.Contains("AuthService"))
+            {
+                sb.AppendLine("import { AuthService } from '../../shared/services/auth.service';");
+            }
+
+            sb.AppendLine($"import {{ {exportName} }} from '{relativePath}';");
+            sb.AppendLine();
+            sb.AppendLine($"describe('{exportName}', () => {{");
+
+            // Create mock services
+            if (fileInfo.Dependencies.Contains("AuthService"))
+            {
+                sb.AppendLine("  let mockAuthService: jasmine.SpyObj<AuthService>;");
+            }
+            sb.AppendLine("  let router: Router;");
+            sb.AppendLine();
+            sb.AppendLine("  beforeEach(() => {");
+
+            if (fileInfo.Dependencies.Contains("AuthService"))
+            {
+                sb.AppendLine("    mockAuthService = jasmine.createSpyObj('AuthService', ['hasValidToken', 'setRedirectUrl']);");
+            }
+
+            sb.AppendLine();
+            sb.AppendLine("    TestBed.configureTestingModule({");
+            sb.AppendLine("      providers: [");
+            sb.AppendLine("        provideRouter([]),");
+
+            if (fileInfo.Dependencies.Contains("AuthService"))
+            {
+                sb.AppendLine("        { provide: AuthService, useValue: mockAuthService },");
+            }
+
+            sb.AppendLine("      ],");
+            sb.AppendLine("    });");
+            sb.AppendLine();
+            sb.AppendLine("    router = TestBed.inject(Router);");
+            sb.AppendLine("  });");
+            sb.AppendLine();
+            sb.AppendLine("  it('should allow activation when authenticated', () => {");
+
+            if (fileInfo.Dependencies.Contains("AuthService"))
+            {
+                sb.AppendLine("    mockAuthService.hasValidToken.and.returnValue(true);");
+            }
+
+            sb.AppendLine();
+            sb.AppendLine("    const result = TestBed.runInInjectionContext(() => {");
+            sb.AppendLine("      const mockRoute = {} as ActivatedRouteSnapshot;");
+            sb.AppendLine("      const mockState = { url: '/test' } as RouterStateSnapshot;");
+            sb.AppendLine($"      return {exportName}(mockRoute, mockState);");
+            sb.AppendLine("    });");
+            sb.AppendLine();
+            sb.AppendLine("    expect(result).toBe(true);");
+            sb.AppendLine("  });");
+            sb.AppendLine();
+            sb.AppendLine("  it('should deny activation when not authenticated', () => {");
+
+            if (fileInfo.Dependencies.Contains("AuthService"))
+            {
+                sb.AppendLine("    mockAuthService.hasValidToken.and.returnValue(false);");
+            }
+
+            sb.AppendLine("    const navigateSpy = spyOn(router, 'navigate');");
+            sb.AppendLine();
+            sb.AppendLine("    const result = TestBed.runInInjectionContext(() => {");
+            sb.AppendLine("      const mockRoute = {} as ActivatedRouteSnapshot;");
+            sb.AppendLine("      const mockState = { url: '/protected' } as RouterStateSnapshot;");
+            sb.AppendLine($"      return {exportName}(mockRoute, mockState);");
+            sb.AppendLine("    });");
+            sb.AppendLine();
+            sb.AppendLine("    expect(result).toBe(false);");
+            sb.AppendLine("    expect(navigateSpy).toHaveBeenCalledWith(['/login']);");
+            sb.AppendLine("  });");
+            sb.AppendLine("});");
+        }
+        else
+        {
+            // Class-based guard test
+            var className = fileInfo.ClassName;
+            sb.AppendLine("import { TestBed } from '@angular/core/testing';");
+            sb.AppendLine($"import {{ {className} }} from '{relativePath}';");
+            sb.AppendLine();
+            sb.AppendLine($"describe('{className}', () => {{");
+            sb.AppendLine($"  let guard: {className};");
+            sb.AppendLine();
+            sb.AppendLine("  beforeEach(() => {");
+            sb.AppendLine("    TestBed.configureTestingModule({");
+            sb.AppendLine($"      providers: [{className}],");
+            sb.AppendLine("    });");
+            sb.AppendLine($"    guard = TestBed.inject({className});");
+            sb.AppendLine("  });");
+            sb.AppendLine();
+            sb.AppendLine("  it('should be created', () => {");
+            sb.AppendLine("    expect(guard).toBeTruthy();");
+            sb.AppendLine("  });");
+            sb.AppendLine("});");
+        }
+
+        return sb.ToString();
     }
 
-    private async Task<string> GenerateInterceptorTestAsync(TypeScriptFileInfo fileInfo, CancellationToken cancellationToken)
+    private string GenerateInterceptorTest(TypeScriptFileInfo fileInfo)
     {
         var sb = new StringBuilder();
-        var relativePath = $"./{Path.GetFileName(fileInfo.FilePath)}";
+        var relativePath = $"./{Path.GetFileName(fileInfo.FilePath)}".Replace(".ts", "");
+        var exportName = fileInfo.ExportName;
 
-        sb.AppendLine($"import {{ TestBed }} from '@angular/core/testing';");
-        sb.AppendLine($"import {{ HttpClientTestingModule, HttpTestingController }} from '@angular/common/http/testing';");
-        sb.AppendLine($"import {{ {fileInfo.ClassName} }} from '{relativePath.Replace(".ts", "")}';");
-        sb.AppendLine();
-        sb.AppendLine($"describe('{fileInfo.ClassName}', () => {{");
-        sb.AppendLine($"  let interceptor: {fileInfo.ClassName};");
-        sb.AppendLine($"  let httpMock: HttpTestingController;");
-        sb.AppendLine();
-        sb.AppendLine($"  beforeEach(() => {{");
-        sb.AppendLine($"    TestBed.configureTestingModule({{");
-        sb.AppendLine($"      imports: [HttpClientTestingModule],");
-        sb.AppendLine($"      providers: [{fileInfo.ClassName}]");
-        sb.AppendLine($"    }});");
-        sb.AppendLine($"    interceptor = TestBed.inject({fileInfo.ClassName});");
-        sb.AppendLine($"    httpMock = TestBed.inject(HttpTestingController);");
-        sb.AppendLine($"  }});");
-        sb.AppendLine();
-        sb.AppendLine($"  afterEach(() => {{");
-        sb.AppendLine($"    httpMock.verify();");
-        sb.AppendLine($"  }});");
-        sb.AppendLine();
-        sb.AppendLine($"  it('should be created', () => {{");
-        sb.AppendLine($"    expect(interceptor).toBeTruthy();");
-        sb.AppendLine($"  }});");
-        sb.AppendLine();
-        sb.AppendLine($"  it('should intercept HTTP requests', () => {{");
-        sb.AppendLine($"    // Test request interception");
-        sb.AppendLine($"    expect(interceptor).toBeTruthy();");
-        sb.AppendLine($"  }});");
-        sb.AppendLine();
-        sb.AppendLine($"  it('should handle HTTP responses', () => {{");
-        sb.AppendLine($"    // Test response handling");
-        sb.AppendLine($"    expect(interceptor).toBeTruthy();");
-        sb.AppendLine($"  }});");
-        sb.AppendLine();
-        sb.AppendLine($"  it('should handle errors', () => {{");
-        sb.AppendLine($"    // Test error handling");
-        sb.AppendLine($"    expect(interceptor).toBeTruthy();");
-        sb.AppendLine($"  }});");
-        sb.AppendLine($"}});");
+        if (fileInfo.IsFunctional)
+        {
+            // Functional interceptor test
+            sb.AppendLine("import { TestBed } from '@angular/core/testing';");
+            sb.AppendLine("import { HttpClient, HttpHandlerFn, HttpRequest, provideHttpClient, withInterceptors } from '@angular/common/http';");
+            sb.AppendLine("import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';");
+            sb.AppendLine("import { provideRouter, Router } from '@angular/router';");
 
-        return await Task.FromResult(sb.ToString());
+            if (fileInfo.Dependencies.Contains("AuthService"))
+            {
+                sb.AppendLine("import { AuthService } from '../../shared/services/auth.service';");
+            }
+
+            sb.AppendLine($"import {{ {exportName} }} from '{relativePath}';");
+            sb.AppendLine();
+            sb.AppendLine($"describe('{exportName}', () => {{");
+            sb.AppendLine("  let httpClient: HttpClient;");
+            sb.AppendLine("  let httpMock: HttpTestingController;");
+
+            if (fileInfo.Dependencies.Contains("AuthService"))
+            {
+                sb.AppendLine("  let mockAuthService: jasmine.SpyObj<AuthService>;");
+            }
+
+            sb.AppendLine();
+            sb.AppendLine("  beforeEach(() => {");
+
+            if (fileInfo.Dependencies.Contains("AuthService"))
+            {
+                sb.AppendLine("    mockAuthService = jasmine.createSpyObj('AuthService', [");
+                sb.AppendLine("      'getAccessToken',");
+                sb.AppendLine("      'getRefreshToken',");
+                sb.AppendLine("      'refreshToken',");
+                sb.AppendLine("      'logout',");
+                sb.AppendLine("      'setRedirectUrl',");
+                sb.AppendLine("    ]);");
+            }
+
+            sb.AppendLine();
+            sb.AppendLine("    TestBed.configureTestingModule({");
+            sb.AppendLine("      providers: [");
+            sb.AppendLine($"        provideHttpClient(withInterceptors([{exportName}])),");
+            sb.AppendLine("        provideHttpClientTesting(),");
+            sb.AppendLine("        provideRouter([]),");
+
+            if (fileInfo.Dependencies.Contains("AuthService"))
+            {
+                sb.AppendLine("        { provide: AuthService, useValue: mockAuthService },");
+            }
+
+            sb.AppendLine("      ],");
+            sb.AppendLine("    });");
+            sb.AppendLine();
+            sb.AppendLine("    httpClient = TestBed.inject(HttpClient);");
+            sb.AppendLine("    httpMock = TestBed.inject(HttpTestingController);");
+            sb.AppendLine("  });");
+            sb.AppendLine();
+            sb.AppendLine("  afterEach(() => {");
+            sb.AppendLine("    httpMock.verify();");
+            sb.AppendLine("  });");
+            sb.AppendLine();
+            sb.AppendLine("  it('should add auth header to requests', () => {");
+
+            if (fileInfo.Dependencies.Contains("AuthService"))
+            {
+                sb.AppendLine("    mockAuthService.getAccessToken.and.returnValue('test-token');");
+            }
+
+            sb.AppendLine();
+            sb.AppendLine("    httpClient.get('/api/test').subscribe();");
+            sb.AppendLine();
+            sb.AppendLine("    const req = httpMock.expectOne('/api/test');");
+            sb.AppendLine("    expect(req.request.headers.has('Authorization')).toBe(true);");
+            sb.AppendLine("    req.flush({});");
+            sb.AppendLine("  });");
+            sb.AppendLine();
+            sb.AppendLine("  it('should skip auth header for login endpoint', () => {");
+
+            if (fileInfo.Dependencies.Contains("AuthService"))
+            {
+                sb.AppendLine("    mockAuthService.getAccessToken.and.returnValue('test-token');");
+            }
+
+            sb.AppendLine();
+            sb.AppendLine("    httpClient.post('/api/auth/login', {}).subscribe();");
+            sb.AppendLine();
+            sb.AppendLine("    const req = httpMock.expectOne('/api/auth/login');");
+            sb.AppendLine("    expect(req.request.headers.has('Authorization')).toBe(false);");
+            sb.AppendLine("    req.flush({});");
+            sb.AppendLine("  });");
+            sb.AppendLine("});");
+        }
+        else
+        {
+            // Class-based interceptor test
+            var className = fileInfo.ClassName;
+            sb.AppendLine("import { TestBed } from '@angular/core/testing';");
+            sb.AppendLine("import { HttpClientTestingModule, HttpTestingController } from '@angular/common/http/testing';");
+            sb.AppendLine($"import {{ {className} }} from '{relativePath}';");
+            sb.AppendLine();
+            sb.AppendLine($"describe('{className}', () => {{");
+            sb.AppendLine($"  let interceptor: {className};");
+            sb.AppendLine("  let httpMock: HttpTestingController;");
+            sb.AppendLine();
+            sb.AppendLine("  beforeEach(() => {");
+            sb.AppendLine("    TestBed.configureTestingModule({");
+            sb.AppendLine("      imports: [HttpClientTestingModule],");
+            sb.AppendLine($"      providers: [{className}],");
+            sb.AppendLine("    });");
+            sb.AppendLine($"    interceptor = TestBed.inject({className});");
+            sb.AppendLine("    httpMock = TestBed.inject(HttpTestingController);");
+            sb.AppendLine("  });");
+            sb.AppendLine();
+            sb.AppendLine("  afterEach(() => {");
+            sb.AppendLine("    httpMock.verify();");
+            sb.AppendLine("  });");
+            sb.AppendLine();
+            sb.AppendLine("  it('should be created', () => {");
+            sb.AppendLine("    expect(interceptor).toBeTruthy();");
+            sb.AppendLine("  });");
+            sb.AppendLine("});");
+        }
+
+        return sb.ToString();
     }
 
-    private async Task<string> GenerateResolverTestAsync(TypeScriptFileInfo fileInfo, CancellationToken cancellationToken)
+    private string GenerateResolverTest(TypeScriptFileInfo fileInfo)
     {
         var sb = new StringBuilder();
-        var relativePath = $"./{Path.GetFileName(fileInfo.FilePath)}";
+        var relativePath = $"./{Path.GetFileName(fileInfo.FilePath)}".Replace(".ts", "");
+        var exportName = fileInfo.ExportName;
 
-        sb.AppendLine($"import {{ TestBed }} from '@angular/core/testing';");
-        sb.AppendLine($"import {{ {fileInfo.ClassName} }} from '{relativePath.Replace(".ts", "")}';");
-        sb.AppendLine();
-        sb.AppendLine($"describe('{fileInfo.ClassName}', () => {{");
-        sb.AppendLine($"  let resolver: {fileInfo.ClassName};");
-        sb.AppendLine();
-        sb.AppendLine($"  beforeEach(() => {{");
-        sb.AppendLine($"    TestBed.configureTestingModule({{");
-        sb.AppendLine($"      providers: [{fileInfo.ClassName}]");
-        sb.AppendLine($"    }});");
-        sb.AppendLine($"    resolver = TestBed.inject({fileInfo.ClassName});");
-        sb.AppendLine($"  }});");
-        sb.AppendLine();
-        sb.AppendLine($"  it('should be created', () => {{");
-        sb.AppendLine($"    expect(resolver).toBeTruthy();");
-        sb.AppendLine($"  }});");
-        sb.AppendLine();
-        sb.AppendLine($"  it('should resolve data', async () => {{");
-        sb.AppendLine($"    const mockRoute: any = {{ snapshot: {{}} }};");
-        sb.AppendLine($"    const mockState: any = {{ url: '/test' }};");
-        sb.AppendLine($"    const result = await resolver.resolve(mockRoute, mockState);");
-        sb.AppendLine($"    expect(result).toBeDefined();");
-        sb.AppendLine($"  }});");
-        sb.AppendLine();
-        sb.AppendLine($"  it('should handle route parameters', () => {{");
-        sb.AppendLine($"    // Test route parameter handling");
-        sb.AppendLine($"    expect(resolver).toBeTruthy();");
-        sb.AppendLine($"  }});");
-        sb.AppendLine();
-        sb.AppendLine($"  it('should handle errors', () => {{");
-        sb.AppendLine($"    // Test error handling");
-        sb.AppendLine($"    expect(resolver).toBeTruthy();");
-        sb.AppendLine($"  }});");
-        sb.AppendLine();
-        sb.AppendLine($"  it('should cache results if applicable', () => {{");
-        sb.AppendLine($"    // Test caching logic");
-        sb.AppendLine($"    expect(resolver).toBeTruthy();");
-        sb.AppendLine($"  }});");
-        sb.AppendLine($"}});");
+        if (fileInfo.IsFunctional)
+        {
+            // Functional resolver test
+            sb.AppendLine("import { TestBed } from '@angular/core/testing';");
+            sb.AppendLine("import { ActivatedRouteSnapshot, RouterStateSnapshot } from '@angular/router';");
+            sb.AppendLine($"import {{ {exportName} }} from '{relativePath}';");
+            sb.AppendLine();
+            sb.AppendLine($"describe('{exportName}', () => {{");
+            sb.AppendLine("  beforeEach(() => {");
+            sb.AppendLine("    TestBed.configureTestingModule({});");
+            sb.AppendLine("  });");
+            sb.AppendLine();
+            sb.AppendLine("  it('should resolve data', () => {");
+            sb.AppendLine("    const result = TestBed.runInInjectionContext(() => {");
+            sb.AppendLine("      const mockRoute = {} as ActivatedRouteSnapshot;");
+            sb.AppendLine("      const mockState = { url: '/test' } as RouterStateSnapshot;");
+            sb.AppendLine($"      return {exportName}(mockRoute, mockState);");
+            sb.AppendLine("    });");
+            sb.AppendLine();
+            sb.AppendLine("    expect(result).toBeDefined();");
+            sb.AppendLine("  });");
+            sb.AppendLine("});");
+        }
+        else
+        {
+            // Class-based resolver test
+            var className = fileInfo.ClassName;
+            sb.AppendLine("import { TestBed } from '@angular/core/testing';");
+            sb.AppendLine($"import {{ {className} }} from '{relativePath}';");
+            sb.AppendLine();
+            sb.AppendLine($"describe('{className}', () => {{");
+            sb.AppendLine($"  let resolver: {className};");
+            sb.AppendLine();
+            sb.AppendLine("  beforeEach(() => {");
+            sb.AppendLine("    TestBed.configureTestingModule({");
+            sb.AppendLine($"      providers: [{className}],");
+            sb.AppendLine("    });");
+            sb.AppendLine($"    resolver = TestBed.inject({className});");
+            sb.AppendLine("  });");
+            sb.AppendLine();
+            sb.AppendLine("  it('should be created', () => {");
+            sb.AppendLine("    expect(resolver).toBeTruthy();");
+            sb.AppendLine("  });");
+            sb.AppendLine("});");
+        }
 
-        return await Task.FromResult(sb.ToString());
+        return sb.ToString();
     }
 
-    private async Task<string> GenerateGenericTestAsync(TypeScriptFileInfo fileInfo, CancellationToken cancellationToken)
+    private string GenerateModelTest(TypeScriptFileInfo fileInfo)
+    {
+        // Skip if it's only interfaces
+        if (fileInfo.IsInterfaceOrType)
+        {
+            return string.Empty;
+        }
+
+        var sb = new StringBuilder();
+        var relativePath = $"./{Path.GetFileName(fileInfo.FilePath)}".Replace(".ts", "");
+        var className = fileInfo.ClassName;
+
+        sb.AppendLine($"import {{ {className} }} from '{relativePath}';");
+        sb.AppendLine();
+        sb.AppendLine($"describe('{className}', () => {{");
+        sb.AppendLine("  it('should be defined', () => {");
+        sb.AppendLine($"    expect({className}).toBeDefined();");
+        sb.AppendLine("  });");
+        sb.AppendLine();
+        sb.AppendLine("  it('should create instance', () => {");
+        sb.AppendLine($"    const instance = new {className}();");
+        sb.AppendLine("    expect(instance).toBeTruthy();");
+        sb.AppendLine("  });");
+        sb.AppendLine("});");
+
+        return sb.ToString();
+    }
+
+    private string GenerateGenericTest(TypeScriptFileInfo fileInfo)
     {
         var sb = new StringBuilder();
-        var relativePath = $"./{Path.GetFileName(fileInfo.FilePath)}";
+        var relativePath = $"./{Path.GetFileName(fileInfo.FilePath)}".Replace(".ts", "");
+        var className = fileInfo.ClassName;
 
-        sb.AppendLine($"import {{ {fileInfo.ClassName} }} from '{relativePath.Replace(".ts", "")}';");
+        sb.AppendLine($"import {{ {className} }} from '{relativePath}';");
         sb.AppendLine();
-        sb.AppendLine($"describe('{fileInfo.ClassName}', () => {{");
-        sb.AppendLine($"  it('should be defined', () => {{");
-        sb.AppendLine($"    expect({fileInfo.ClassName}).toBeDefined();");
-        sb.AppendLine($"  }});");
-        sb.AppendLine();
-        sb.AppendLine($"  it('should have correct structure', () => {{");
-        sb.AppendLine($"    // Test structure");
-        sb.AppendLine($"    expect({fileInfo.ClassName}).toBeTruthy();");
-        sb.AppendLine($"  }});");
-        sb.AppendLine();
-        sb.AppendLine($"  it('should handle basic operations', () => {{");
-        sb.AppendLine($"    // Test basic operations");
-        sb.AppendLine($"    expect({fileInfo.ClassName}).toBeTruthy();");
-        sb.AppendLine($"  }});");
-        sb.AppendLine();
-        sb.AppendLine($"  it('should validate input', () => {{");
-        sb.AppendLine($"    // Test input validation");
-        sb.AppendLine($"    expect({fileInfo.ClassName}).toBeTruthy();");
-        sb.AppendLine($"  }});");
-        sb.AppendLine();
-        sb.AppendLine($"  it('should handle edge cases', () => {{");
-        sb.AppendLine($"    // Test edge cases");
-        sb.AppendLine($"    expect({fileInfo.ClassName}).toBeTruthy();");
-        sb.AppendLine($"  }});");
-        sb.AppendLine($"}});");
+        sb.AppendLine($"describe('{className}', () => {{");
+        sb.AppendLine("  it('should be defined', () => {");
+        sb.AppendLine($"    expect({className}).toBeDefined();");
+        sb.AppendLine("  });");
+        sb.AppendLine("});");
 
-        return await Task.FromResult(sb.ToString());
+        return sb.ToString();
     }
 }

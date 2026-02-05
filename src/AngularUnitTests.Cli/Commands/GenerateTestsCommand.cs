@@ -68,14 +68,23 @@ public class GenerateTestsCommandHandler
             // Generate tests for each file
             var successCount = 0;
             var failureCount = 0;
+            var skippedCount = 0;
 
             foreach (var fileInfo in fileList)
             {
                 try
                 {
                     var testFilePath = await _generatorService.GenerateTestFileAsync(fileInfo, cancellationToken);
-                    Console.WriteLine($"✓ Generated: {Path.GetFileName(testFilePath)}");
-                    successCount++;
+                    if (testFilePath != null)
+                    {
+                        Console.WriteLine($"✓ Generated: {Path.GetFileName(testFilePath)}");
+                        successCount++;
+                    }
+                    else
+                    {
+                        Console.WriteLine($"- Skipped: {fileInfo.FileName} (interface/type only)");
+                        skippedCount++;
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -88,10 +97,11 @@ public class GenerateTestsCommandHandler
             Console.WriteLine();
             Console.WriteLine($"Test generation complete:");
             Console.WriteLine($"  Success: {successCount}");
+            Console.WriteLine($"  Skipped: {skippedCount}");
             Console.WriteLine($"  Failed: {failureCount}");
             Console.WriteLine($"  Total: {fileList.Count}");
 
-            _logger.LogInformation("Test generation completed. Success: {Success}, Failed: {Failed}", successCount, failureCount);
+            _logger.LogInformation("Test generation completed. Success: {Success}, Skipped: {Skipped}, Failed: {Failed}", successCount, skippedCount, failureCount);
 
             return failureCount > 0 ? 1 : 0;
         }

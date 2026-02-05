@@ -2,6 +2,7 @@ using AngularUnitTests.Cli.Configuration;
 using AngularUnitTests.Cli.Models;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using System.Text.RegularExpressions;
 
 namespace AngularUnitTests.Cli.Services;
 
@@ -14,6 +15,16 @@ public class TypeScriptFileDiscoveryService : ITypeScriptFileDiscoveryService
 {
     private readonly ILogger<TypeScriptFileDiscoveryService> _logger;
     private readonly AngularTestGeneratorOptions _options;
+
+    // Regex patterns for detecting Angular patterns
+    private static readonly Regex FunctionalGuardPattern = new(@"export\s+const\s+(\w+)\s*:\s*CanActivateFn", RegexOptions.Compiled);
+    private static readonly Regex FunctionalInterceptorPattern = new(@"export\s+const\s+(\w+)\s*:\s*HttpInterceptorFn", RegexOptions.Compiled);
+    private static readonly Regex FunctionalResolverPattern = new(@"export\s+const\s+(\w+)\s*:\s*ResolveFn", RegexOptions.Compiled);
+    private static readonly Regex ClassPattern = new(@"export\s+class\s+(\w+)", RegexOptions.Compiled);
+    private static readonly Regex InterfacePattern = new(@"export\s+interface\s+(\w+)", RegexOptions.Compiled);
+    private static readonly Regex TypeAliasPattern = new(@"export\s+type\s+(\w+)", RegexOptions.Compiled);
+    private static readonly Regex InjectPattern = new(@"inject\s*\(\s*(\w+)\s*\)", RegexOptions.Compiled);
+    private static readonly Regex StandalonePattern = new(@"standalone\s*:\s*true", RegexOptions.Compiled);
 
     public TypeScriptFileDiscoveryService(
         ILogger<TypeScriptFileDiscoveryService> logger,
@@ -35,23 +46,19 @@ public class TypeScriptFileDiscoveryService : ITypeScriptFileDiscoveryService
         }
 
         var typeScriptFiles = new List<TypeScriptFileInfo>();
+        var files = Directory.GetFiles(angularAppPath, "*.ts", SearchOption.AllDirectories)
+            .Where(f => !IsExcludedPath(f) && !IsTestFile(f));
 
-        await Task.Run(() =>
+        foreach (var file in files)
         {
-            var files = Directory.GetFiles(angularAppPath, "*.ts", SearchOption.AllDirectories)
-                .Where(f => !IsExcludedPath(f) && !IsTestFile(f));
+            cancellationToken.ThrowIfCancellationRequested();
 
-            foreach (var file in files)
+            var fileInfo = await AnalyzeTypeScriptFileAsync(file, cancellationToken);
+            if (fileInfo != null)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                var fileInfo = AnalyzeTypeScriptFile(file);
-                if (fileInfo != null)
-                {
-                    typeScriptFiles.Add(fileInfo);
-                }
+                typeScriptFiles.Add(fileInfo);
             }
-        }, cancellationToken);
+        }
 
         _logger.LogInformation("Discovered {Count} TypeScript files", typeScriptFiles.Count);
         return typeScriptFiles;
@@ -69,7 +76,7 @@ public class TypeScriptFileDiscoveryService : ITypeScriptFileDiscoveryService
         return filePath.Contains(".spec.") || filePath.Contains(".test.");
     }
 
-    private TypeScriptFileInfo? AnalyzeTypeScriptFile(string filePath)
+    private async Task<TypeScriptFileInfo?> AnalyzeTypeScriptFileAsync(string filePath, CancellationToken cancellationToken)
     {
         try
         {
@@ -82,22 +89,150 @@ public class TypeScriptFileDiscoveryService : ITypeScriptFileDiscoveryService
                 return null;
             }
 
-            var className = ExtractClassName(fileName, fileType);
-            var existingTestCount = CountExistingTestFiles(filePath);
+            // Read file content for detailed analysis
+            var content = await File.ReadAllTextAsync(filePath, cancellationToken);
 
-            return new TypeScriptFileInfo
+            var fileInfo = new TypeScriptFileInfo
             {
                 FilePath = filePath,
                 FileName = fileName,
                 FileType = fileType,
-                ClassName = className,
-                ExistingTestFileCount = existingTestCount
+                ClassName = ExtractClassName(fileName, fileType),
+                ExistingTestFileCount = CountExistingTestFiles(filePath),
+                FileContent = content
             };
+
+            // Analyze the file content for patterns
+            AnalyzeFileContent(fileInfo, content);
+
+            return fileInfo;
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Error analyzing file: {FilePath}", filePath);
             return null;
+        }
+    }
+
+    private void AnalyzeFileContent(TypeScriptFileInfo fileInfo, string content)
+    {
+        // Check for functional vs class-based patterns
+        switch (fileInfo.FileType)
+        {
+            case TypeScriptFileType.Guard:
+                var guardMatch = FunctionalGuardPattern.Match(content);
+                if (guardMatch.Success)
+                {
+                    fileInfo.IsFunctional = true;
+                    fileInfo.ExportName = guardMatch.Groups[1].Value;
+                }
+                else
+                {
+                    var classMatch = ClassPattern.Match(content);
+                    if (classMatch.Success)
+                    {
+                        fileInfo.ExportName = classMatch.Groups[1].Value;
+                        fileInfo.ClassName = classMatch.Groups[1].Value;
+                    }
+                }
+                break;
+
+            case TypeScriptFileType.Interceptor:
+                var interceptorMatch = FunctionalInterceptorPattern.Match(content);
+                if (interceptorMatch.Success)
+                {
+                    fileInfo.IsFunctional = true;
+                    fileInfo.ExportName = interceptorMatch.Groups[1].Value;
+                }
+                else
+                {
+                    var classMatch = ClassPattern.Match(content);
+                    if (classMatch.Success)
+                    {
+                        fileInfo.ExportName = classMatch.Groups[1].Value;
+                        fileInfo.ClassName = classMatch.Groups[1].Value;
+                    }
+                }
+                break;
+
+            case TypeScriptFileType.Resolver:
+                var resolverMatch = FunctionalResolverPattern.Match(content);
+                if (resolverMatch.Success)
+                {
+                    fileInfo.IsFunctional = true;
+                    fileInfo.ExportName = resolverMatch.Groups[1].Value;
+                }
+                else
+                {
+                    var classMatch = ClassPattern.Match(content);
+                    if (classMatch.Success)
+                    {
+                        fileInfo.ExportName = classMatch.Groups[1].Value;
+                        fileInfo.ClassName = classMatch.Groups[1].Value;
+                    }
+                }
+                break;
+
+            case TypeScriptFileType.Model:
+                // Check if it's only interfaces or types (no classes)
+                var hasClass = ClassPattern.IsMatch(content);
+                var hasInterface = InterfacePattern.IsMatch(content);
+                var hasType = TypeAliasPattern.IsMatch(content);
+                fileInfo.IsInterfaceOrType = !hasClass && (hasInterface || hasType);
+
+                // Get the first export name
+                if (hasClass)
+                {
+                    var classMatch = ClassPattern.Match(content);
+                    fileInfo.ExportName = classMatch.Groups[1].Value;
+                    fileInfo.ClassName = classMatch.Groups[1].Value;
+                }
+                else if (hasInterface)
+                {
+                    var interfaceMatch = InterfacePattern.Match(content);
+                    fileInfo.ExportName = interfaceMatch.Groups[1].Value;
+                }
+                break;
+
+            case TypeScriptFileType.Component:
+            case TypeScriptFileType.Directive:
+                fileInfo.IsStandalone = StandalonePattern.IsMatch(content);
+                var componentClass = ClassPattern.Match(content);
+                if (componentClass.Success)
+                {
+                    fileInfo.ExportName = componentClass.Groups[1].Value;
+                    fileInfo.ClassName = componentClass.Groups[1].Value;
+                }
+                break;
+
+            case TypeScriptFileType.Service:
+                var serviceClass = ClassPattern.Match(content);
+                if (serviceClass.Success)
+                {
+                    fileInfo.ExportName = serviceClass.Groups[1].Value;
+                    fileInfo.ClassName = serviceClass.Groups[1].Value;
+                }
+                break;
+
+            default:
+                var defaultClass = ClassPattern.Match(content);
+                if (defaultClass.Success)
+                {
+                    fileInfo.ExportName = defaultClass.Groups[1].Value;
+                    fileInfo.ClassName = defaultClass.Groups[1].Value;
+                }
+                break;
+        }
+
+        // Extract dependencies from inject() calls
+        var injectMatches = InjectPattern.Matches(content);
+        foreach (Match match in injectMatches)
+        {
+            var dependency = match.Groups[1].Value;
+            if (!fileInfo.Dependencies.Contains(dependency))
+            {
+                fileInfo.Dependencies.Add(dependency);
+            }
         }
     }
 
