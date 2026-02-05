@@ -352,9 +352,10 @@ public class JestTestGeneratorService : IJestTestGeneratorService
 
         if (fileInfo.IsFunctional)
         {
-            // Functional guard test using TestBed.runInInjectionContext
+            // Functional guard test using TestBed.runInInjectionContext (Vitest compatible)
             sb.AppendLine("import { TestBed } from '@angular/core/testing';");
             sb.AppendLine("import { provideRouter, Router, ActivatedRouteSnapshot, RouterStateSnapshot } from '@angular/router';");
+            sb.AppendLine("import { vi, Mock } from 'vitest';");
 
             if (fileInfo.Dependencies.Contains("AuthService"))
             {
@@ -365,10 +366,13 @@ public class JestTestGeneratorService : IJestTestGeneratorService
             sb.AppendLine();
             sb.AppendLine($"describe('{exportName}', () => {{");
 
-            // Create mock services
+            // Create mock services using Vitest
             if (fileInfo.Dependencies.Contains("AuthService"))
             {
-                sb.AppendLine("  let mockAuthService: jasmine.SpyObj<AuthService>;");
+                sb.AppendLine("  let mockAuthService: {");
+                sb.AppendLine("    hasValidToken: Mock;");
+                sb.AppendLine("    setRedirectUrl: Mock;");
+                sb.AppendLine("  };");
             }
             sb.AppendLine("  let router: Router;");
             sb.AppendLine();
@@ -376,7 +380,10 @@ public class JestTestGeneratorService : IJestTestGeneratorService
 
             if (fileInfo.Dependencies.Contains("AuthService"))
             {
-                sb.AppendLine("    mockAuthService = jasmine.createSpyObj('AuthService', ['hasValidToken', 'setRedirectUrl']);");
+                sb.AppendLine("    mockAuthService = {");
+                sb.AppendLine("      hasValidToken: vi.fn(),");
+                sb.AppendLine("      setRedirectUrl: vi.fn(),");
+                sb.AppendLine("    };");
             }
 
             sb.AppendLine();
@@ -399,7 +406,7 @@ public class JestTestGeneratorService : IJestTestGeneratorService
 
             if (fileInfo.Dependencies.Contains("AuthService"))
             {
-                sb.AppendLine("    mockAuthService.hasValidToken.and.returnValue(true);");
+                sb.AppendLine("    mockAuthService.hasValidToken.mockReturnValue(true);");
             }
 
             sb.AppendLine();
@@ -416,10 +423,10 @@ public class JestTestGeneratorService : IJestTestGeneratorService
 
             if (fileInfo.Dependencies.Contains("AuthService"))
             {
-                sb.AppendLine("    mockAuthService.hasValidToken.and.returnValue(false);");
+                sb.AppendLine("    mockAuthService.hasValidToken.mockReturnValue(false);");
             }
 
-            sb.AppendLine("    const navigateSpy = spyOn(router, 'navigate');");
+            sb.AppendLine("    const navigateSpy = vi.spyOn(router, 'navigate').mockImplementation(() => Promise.resolve(true));");
             sb.AppendLine();
             sb.AppendLine("    const result = TestBed.runInInjectionContext(() => {");
             sb.AppendLine("      const mockRoute = {} as ActivatedRouteSnapshot;");
@@ -466,11 +473,12 @@ public class JestTestGeneratorService : IJestTestGeneratorService
 
         if (fileInfo.IsFunctional)
         {
-            // Functional interceptor test
+            // Functional interceptor test (Vitest compatible)
             sb.AppendLine("import { TestBed } from '@angular/core/testing';");
-            sb.AppendLine("import { HttpClient, HttpHandlerFn, HttpRequest, provideHttpClient, withInterceptors } from '@angular/common/http';");
+            sb.AppendLine("import { HttpClient, provideHttpClient, withInterceptors } from '@angular/common/http';");
             sb.AppendLine("import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';");
-            sb.AppendLine("import { provideRouter, Router } from '@angular/router';");
+            sb.AppendLine("import { provideRouter } from '@angular/router';");
+            sb.AppendLine("import { vi, Mock } from 'vitest';");
 
             if (fileInfo.Dependencies.Contains("AuthService"))
             {
@@ -485,7 +493,13 @@ public class JestTestGeneratorService : IJestTestGeneratorService
 
             if (fileInfo.Dependencies.Contains("AuthService"))
             {
-                sb.AppendLine("  let mockAuthService: jasmine.SpyObj<AuthService>;");
+                sb.AppendLine("  let mockAuthService: {");
+                sb.AppendLine("    getAccessToken: Mock;");
+                sb.AppendLine("    getRefreshToken: Mock;");
+                sb.AppendLine("    refreshToken: Mock;");
+                sb.AppendLine("    logout: Mock;");
+                sb.AppendLine("    setRedirectUrl: Mock;");
+                sb.AppendLine("  };");
             }
 
             sb.AppendLine();
@@ -493,13 +507,13 @@ public class JestTestGeneratorService : IJestTestGeneratorService
 
             if (fileInfo.Dependencies.Contains("AuthService"))
             {
-                sb.AppendLine("    mockAuthService = jasmine.createSpyObj('AuthService', [");
-                sb.AppendLine("      'getAccessToken',");
-                sb.AppendLine("      'getRefreshToken',");
-                sb.AppendLine("      'refreshToken',");
-                sb.AppendLine("      'logout',");
-                sb.AppendLine("      'setRedirectUrl',");
-                sb.AppendLine("    ]);");
+                sb.AppendLine("    mockAuthService = {");
+                sb.AppendLine("      getAccessToken: vi.fn(),");
+                sb.AppendLine("      getRefreshToken: vi.fn(),");
+                sb.AppendLine("      refreshToken: vi.fn(),");
+                sb.AppendLine("      logout: vi.fn(),");
+                sb.AppendLine("      setRedirectUrl: vi.fn(),");
+                sb.AppendLine("    };");
             }
 
             sb.AppendLine();
@@ -529,7 +543,7 @@ public class JestTestGeneratorService : IJestTestGeneratorService
 
             if (fileInfo.Dependencies.Contains("AuthService"))
             {
-                sb.AppendLine("    mockAuthService.getAccessToken.and.returnValue('test-token');");
+                sb.AppendLine("    mockAuthService.getAccessToken.mockReturnValue('test-token');");
             }
 
             sb.AppendLine();
@@ -544,7 +558,7 @@ public class JestTestGeneratorService : IJestTestGeneratorService
 
             if (fileInfo.Dependencies.Contains("AuthService"))
             {
-                sb.AppendLine("    mockAuthService.getAccessToken.and.returnValue('test-token');");
+                sb.AppendLine("    mockAuthService.getAccessToken.mockReturnValue('test-token');");
             }
 
             sb.AppendLine();
