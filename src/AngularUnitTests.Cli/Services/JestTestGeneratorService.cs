@@ -246,11 +246,12 @@ public class JestTestGeneratorService : IJestTestGeneratorService
         sb.AppendLine("    expect(service).toBeTruthy();");
         sb.AppendLine("  });");
 
-        // Generate tests for each public method that returns Observable
+        // Generate tests for each public method that returns Observable (excluding Blob types)
         if (needsHttp && fileInfo.PublicMethods.Any())
         {
             var httpMethods = fileInfo.PublicMethods
                 .Where(m => m.ReturnType.Contains("Observable"))
+                .Where(m => !m.ReturnType.Contains("Blob"))  // Skip Blob responses
                 .ToList();
 
             foreach (var method in httpMethods)
