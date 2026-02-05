@@ -164,6 +164,7 @@ public class JestTestGeneratorService : IJestTestGeneratorService
         // Add HttpClient testing if needed
         var needsHttp = fileInfo.Dependencies.Contains("HttpClient");
         var needsRouter = fileInfo.Dependencies.Contains("Router");
+        var needsApiBaseUrl = fileInfo.Dependencies.Contains("API_BASE_URL");
 
         if (needsHttp)
         {
@@ -173,6 +174,12 @@ public class JestTestGeneratorService : IJestTestGeneratorService
         if (needsRouter)
         {
             sb.AppendLine("import { provideRouter, Router } from '@angular/router';");
+        }
+        if (needsApiBaseUrl)
+        {
+            // Try to determine the API config path based on file location
+            var apiConfigPath = DetermineApiConfigPath(fileInfo.FilePath);
+            sb.AppendLine($"import {{ API_BASE_URL }} from '{apiConfigPath}';");
         }
 
         sb.AppendLine($"import {{ {className} }} from '{relativePath}';");
@@ -193,7 +200,6 @@ public class JestTestGeneratorService : IJestTestGeneratorService
         sb.AppendLine("  beforeEach(() => {");
         sb.AppendLine("    TestBed.configureTestingModule({");
         sb.AppendLine("      providers: [");
-        sb.AppendLine($"        {className},");
 
         if (needsHttp)
         {
@@ -206,9 +212,9 @@ public class JestTestGeneratorService : IJestTestGeneratorService
         }
 
         // Handle API_BASE_URL injection token
-        if (fileInfo.Dependencies.Contains("API_BASE_URL"))
+        if (needsApiBaseUrl)
         {
-            sb.AppendLine("        { provide: 'API_BASE_URL', useValue: 'http://localhost:3000' },");
+            sb.AppendLine("        { provide: API_BASE_URL, useValue: 'http://localhost:3000' },");
         }
 
         sb.AppendLine("      ],");
@@ -242,6 +248,30 @@ public class JestTestGeneratorService : IJestTestGeneratorService
         sb.AppendLine("});");
 
         return sb.ToString();
+    }
+
+    private string DetermineApiConfigPath(string filePath)
+    {
+        // Calculate relative path to config/api.config based on file location
+        // This is a simplified approach - could be enhanced with actual file search
+        var directory = Path.GetDirectoryName(filePath) ?? "";
+        var depth = 0;
+
+        // Count how many directories up we need to go to reach shared/config
+        while (!directory.EndsWith("shared") && !directory.EndsWith("app") && depth < 10)
+        {
+            directory = Path.GetDirectoryName(directory) ?? "";
+            depth++;
+        }
+
+        // If in shared folder, config is a sibling
+        if (directory.EndsWith("shared"))
+        {
+            return "../config/api.config";
+        }
+
+        // Default to a common path
+        return "../shared/config/api.config";
     }
 
     private string GenerateDirectiveTest(TypeScriptFileInfo fileInfo)

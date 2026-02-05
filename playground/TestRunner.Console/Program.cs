@@ -211,19 +211,30 @@ class Program
 
     private static async Task<int> RunTestsWithCoverage(string uiDir)
     {
-        // First, check if jest.config.js or jest.config.ts exists
+        // Check for different test configurations
         var jestConfigJs = Path.Combine(uiDir, "jest.config.js");
         var jestConfigTs = Path.Combine(uiDir, "jest.config.ts");
+        var vitestConfigJs = Path.Combine(uiDir, "vitest.config.js");
+        var vitestConfigTs = Path.Combine(uiDir, "vitest.config.ts");
 
-        if (!File.Exists(jestConfigJs) && !File.Exists(jestConfigTs))
+        // Check for Vitest (used in Angular 18+ with @angular/build:unit-test)
+        if (File.Exists(vitestConfigJs) || File.Exists(vitestConfigTs))
         {
-            System.Console.WriteLine("Jest config not found, checking for karma...");
-            // Try ng test with coverage
-            return await RunProcessAsync("npx", "ng test --no-watch --code-coverage --browsers=ChromeHeadless", uiDir);
+            System.Console.WriteLine("Vitest config found, running vitest...");
+            return await RunProcessAsync("npx", "vitest run --coverage", uiDir);
         }
 
-        // Run jest with coverage
-        return await RunProcessAsync("npx", "jest --coverage --coverageThreshold='{\"global\":{\"lines\":80,\"functions\":80,\"branches\":80,\"statements\":80}}'", uiDir);
+        // Check for Jest
+        if (File.Exists(jestConfigJs) || File.Exists(jestConfigTs))
+        {
+            System.Console.WriteLine("Jest config found, running jest...");
+            return await RunProcessAsync("npx", "jest --coverage", uiDir);
+        }
+
+        // For Angular 18+ with @angular/build:unit-test (uses Vitest internally)
+        // The ng test command runs tests without extra flags
+        System.Console.WriteLine("Using Angular CLI test runner with Vitest...");
+        return await RunProcessAsync("npx", "ng test --watch=false", uiDir);
     }
 
     private static void CopyDirectory(string sourceDir, string destinationDir)
