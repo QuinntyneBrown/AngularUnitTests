@@ -245,9 +245,85 @@ public class JestTestGeneratorService : IJestTestGeneratorService
         sb.AppendLine("  it('should be created', () => {");
         sb.AppendLine("    expect(service).toBeTruthy();");
         sb.AppendLine("  });");
+
+        // Generate tests for each public method
+        if (needsHttp && fileInfo.PublicMethods.Any())
+        {
+            foreach (var method in fileInfo.PublicMethods)
+            {
+                sb.AppendLine();
+                GenerateHttpMethodTest(sb, method, className);
+            }
+        }
+
         sb.AppendLine("});");
 
         return sb.ToString();
+    }
+
+    private void GenerateHttpMethodTest(StringBuilder sb, Models.MethodInfo method, string className)
+    {
+        var methodName = method.Name;
+        var isGetMethod = methodName.StartsWith("get") || methodName.StartsWith("Get");
+        var isPostMethod = methodName.StartsWith("create") || methodName.StartsWith("Create") ||
+                          methodName.StartsWith("add") || methodName.StartsWith("Add") ||
+                          methodName.StartsWith("archive") || methodName.StartsWith("Archive") ||
+                          methodName.StartsWith("restore") || methodName.StartsWith("Restore");
+        var isPutMethod = methodName.StartsWith("update") || methodName.StartsWith("Update");
+        var isDeleteMethod = methodName.StartsWith("delete") || methodName.StartsWith("Delete") ||
+                            methodName.StartsWith("remove") || methodName.StartsWith("Remove");
+
+        var httpMethod = isGetMethod ? "GET" :
+                        isPostMethod ? "POST" :
+                        isPutMethod ? "PUT" :
+                        isDeleteMethod ? "DELETE" : "GET";
+
+        sb.AppendLine($"  describe('{methodName}', () => {{");
+        sb.AppendLine($"    it('should make {httpMethod} request', () => {{");
+
+        // Generate mock parameters
+        var paramsList = new List<string>();
+        foreach (var param in method.Parameters)
+        {
+            var mockValue = GetMockValue(param.Type, param.Name);
+            paramsList.Add(mockValue);
+        }
+        var paramsCall = string.Join(", ", paramsList);
+
+        // Generate the test
+        sb.AppendLine($"      const mockResponse = {{}};");
+        sb.AppendLine();
+        sb.AppendLine($"      service.{methodName}({paramsCall}).subscribe({{");
+        sb.AppendLine("        next: (response) => {");
+        sb.AppendLine("          expect(response).toBeDefined();");
+        sb.AppendLine("        },");
+        sb.AppendLine("        error: () => {");
+        sb.AppendLine("          fail('Should not error');");
+        sb.AppendLine("        },");
+        sb.AppendLine("      });");
+        sb.AppendLine();
+        sb.AppendLine($"      const req = httpMock.expectOne((request) => request.method === '{httpMethod}');");
+        sb.AppendLine("      req.flush(mockResponse);");
+        sb.AppendLine("    });");
+        sb.AppendLine("  });");
+    }
+
+    private string GetMockValue(string type, string paramName)
+    {
+        // Generate appropriate mock values based on parameter type
+        var normalizedType = type.Trim().ToLowerInvariant();
+
+        if (normalizedType == "string")
+            return "'test-value'";
+        if (normalizedType == "number")
+            return "1";
+        if (normalizedType == "boolean")
+            return "true";
+        if (paramName.ToLowerInvariant().Contains("id"))
+            return "'test-id'";
+
+        // For complex types, return an empty object
+        return "{}";
     }
 
     private string DetermineApiConfigPath(string filePath)

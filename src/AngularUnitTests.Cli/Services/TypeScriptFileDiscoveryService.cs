@@ -25,6 +25,10 @@ public class TypeScriptFileDiscoveryService : ITypeScriptFileDiscoveryService
     private static readonly Regex TypeAliasPattern = new(@"export\s+type\s+(\w+)", RegexOptions.Compiled);
     private static readonly Regex InjectPattern = new(@"inject\s*\(\s*(\w+)\s*\)", RegexOptions.Compiled);
     private static readonly Regex StandalonePattern = new(@"standalone\s*:\s*true", RegexOptions.Compiled);
+    // Method pattern: captures method name, parameters, and return type
+    private static readonly Regex PublicMethodPattern = new(
+        @"^\s+(?!private|protected)(\w+)\s*\(([^)]*)\)\s*:\s*(Observable<[^>]+>|Promise<[^>]+>|[^{\n]+)",
+        RegexOptions.Compiled | RegexOptions.Multiline);
 
     public TypeScriptFileDiscoveryService(
         ILogger<TypeScriptFileDiscoveryService> logger,
@@ -212,6 +216,8 @@ public class TypeScriptFileDiscoveryService : ITypeScriptFileDiscoveryService
                     fileInfo.ExportName = serviceClass.Groups[1].Value;
                     fileInfo.ClassName = serviceClass.Groups[1].Value;
                 }
+                // Extract public methods from service
+                ExtractPublicMethods(fileInfo, content);
                 break;
 
             default:
@@ -288,5 +294,68 @@ public class TypeScriptFileDiscoveryService : ITypeScriptFileDiscoveryService
         var existingTestFiles = Directory.GetFiles(directory, pattern);
 
         return existingTestFiles.Length;
+    }
+
+    private void ExtractPublicMethods(TypeScriptFileInfo fileInfo, string content)
+    {
+        // Find the class body
+        var classMatch = ClassPattern.Match(content);
+        if (!classMatch.Success) return;
+
+        var classStartIndex = classMatch.Index;
+        var classContent = content[classStartIndex..];
+
+        // Find methods that look like: methodName(params): ReturnType {
+        var methodMatches = PublicMethodPattern.Matches(classContent);
+
+        foreach (Match match in methodMatches)
+        {
+            var methodName = match.Groups[1].Value.Trim();
+            var parametersString = match.Groups[2].Value.Trim();
+            var returnType = match.Groups[3].Value.Trim();
+
+            // Skip constructor and private methods
+            if (methodName == "constructor" ||
+                methodName.StartsWith("_") ||
+                methodName == "ngOnInit" ||
+                methodName == "ngOnDestroy" ||
+                methodName == "ngOnChanges")
+            {
+                continue;
+            }
+
+            var methodInfo = new Models.MethodInfo
+            {
+                Name = methodName,
+                ReturnType = returnType,
+                IsAsync = returnType.StartsWith("Observable") || returnType.StartsWith("Promise")
+            };
+
+            // Parse parameters
+            if (!string.IsNullOrWhiteSpace(parametersString))
+            {
+                var paramParts = parametersString.Split(',');
+                foreach (var param in paramParts)
+                {
+                    var trimmed = param.Trim();
+                    var colonIndex = trimmed.IndexOf(':');
+                    if (colonIndex > 0)
+                    {
+                        var paramName = trimmed[..colonIndex].Trim();
+                        var paramType = trimmed[(colonIndex + 1)..].Trim();
+                        methodInfo.Parameters.Add(new Models.ParameterInfo
+                        {
+                            Name = paramName,
+                            Type = paramType
+                        });
+                    }
+                }
+            }
+
+            if (!fileInfo.PublicMethods.Any(m => m.Name == methodName))
+            {
+                fileInfo.PublicMethods.Add(methodInfo);
+            }
+        }
     }
 }

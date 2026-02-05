@@ -38,6 +38,25 @@ public class TypeScriptFileInfo
     /// Whether the file exports an interface or type (not a class)
     /// </summary>
     public bool IsInterfaceOrType { get; set; }
+
+    /// <summary>
+    /// List of public methods discovered in the class
+    /// </summary>
+    public List<MethodInfo> PublicMethods { get; set; } = new();
+}
+
+public class MethodInfo
+{
+    public string Name { get; set; } = string.Empty;
+    public string ReturnType { get; set; } = string.Empty;
+    public List<ParameterInfo> Parameters { get; set; } = new();
+    public bool IsAsync { get; set; }
+}
+
+public class ParameterInfo
+{
+    public string Name { get; set; } = string.Empty;
+    public string Type { get; set; } = string.Empty;
 }
 
 public enum TypeScriptFileType
