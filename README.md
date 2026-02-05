@@ -1,142 +1,168 @@
-# AngularUnitTests
+# ngt - Angular Unit Test Generator
 
-A C# CLI tool to automatically generate Jest unit tests for Angular TypeScript files with 80% test coverage target.
+A .NET CLI tool to automatically generate Jest/Vitest unit tests for Angular TypeScript files with 80% test coverage target.
 
 ## Features
 
-- **File-per-command architecture** using System.CommandLine
-- **Microsoft Extensions** integration for Logging, DI, Configuration, and Options pattern
-- **Automatic test generation** for Angular components, services, directives, pipes, guards, interceptors, resolvers, and more
-- **Smart file naming** with discriminating values (e.g., `.spec.2.ts`) when test files already exist
-- **80% test coverage** patterns in generated tests
+- **Global .NET Tool** - Install once, use anywhere with the `ngt` command
+- **Smart File Detection** - Automatically identifies components, services, guards, interceptors, pipes, directives, and resolvers
+- **Modern Angular Support** - Handles both functional (arrow function) and class-based patterns
+- **Standalone Components** - Detects and properly tests standalone components and directives
+- **Dependency Detection** - Automatically mocks HttpClient, Router, AuthService, and injection tokens
+- **Non-Destructive** - Creates numbered test files when specs already exist (e.g., `.spec.2.ts`)
+- **Workspace Aware** - Automatically detects Angular workspaces via `angular.json`
+
+## Quick Start
+
+### Installation
+
+```bash
+dotnet tool install --global ngt
+```
+
+### Usage
+
+Navigate to your Angular project and generate tests:
+
+```bash
+cd /path/to/angular-app/src/app
+ngt generate
+```
+
+Or specify a path:
+
+```bash
+ngt generate --path /path/to/angular/app
+```
+
+### Example Output
+
+```
+Detected Angular workspace at: /home/user/my-angular-app
+Generating tests for: /home/user/my-angular-app/src/app
+Found 12 TypeScript file(s) to process.
+
+✓ Generated: app.component.spec.ts
+✓ Generated: user.service.spec.ts
+✓ Generated: auth.guard.spec.ts
+✓ Generated: auth.interceptor.spec.ts
+✓ Generated: date-format.pipe.spec.ts
+- Skipped: user.model (interface/type only)
+
+Test generation complete:
+  Success: 10
+  Skipped: 2
+  Failed: 0
+  Total: 12
+```
+
+## Supported File Types
+
+| Type | File Pattern | Features |
+|------|--------------|----------|
+| **Components** | `*.component.ts` | TestBed, fixtures, standalone detection |
+| **Services** | `*.service.ts` | HTTP mocking, method-level tests |
+| **Guards** | `*.guard.ts` | Functional & class-based, auth mocking |
+| **Interceptors** | `*.interceptor.ts` | HTTP testing, token injection |
+| **Pipes** | `*.pipe.ts` | Transform testing |
+| **Directives** | `*.directive.ts` | Host component testing |
+| **Resolvers** | `*.resolver.ts` | Route data resolution |
+
+## Documentation
+
+- [Getting Started](docs/getting-started.md) - Installation and quick start guide
+- [User Guide](docs/user-guide.md) - Complete usage documentation
+- [Configuration](docs/configuration.md) - Configuration options
+- [Supported Types](docs/supported-types.md) - Detailed guide for each Angular type
+- [Examples](docs/examples.md) - Complete source and test examples
+- [Troubleshooting](docs/troubleshooting.md) - Common issues and solutions
+- [Contributing](docs/contributing.md) - How to contribute
 
 ## Prerequisites
 
 - .NET 9.0 SDK or later
 - An Angular application with TypeScript files
 
-## Building
+## Command Reference
+
+### Generate Command
 
 ```bash
-dotnet build
+ngt generate [options]
 ```
 
-## Usage
+| Option | Alias | Description |
+|--------|-------|-------------|
+| `--path` | `-p` | Path to generate tests for (optional) |
+| `--help` | `-h` | Show help |
 
-### Generate Tests Command
-
-Generate Jest unit tests for all TypeScript files in an Angular application:
+### Global Options
 
 ```bash
-dotnet run --project src/AngularUnitTests.Cli/AngularUnitTests.Cli.csproj -- generate --path /path/to/angular/app
+ngt --version    # Show version
+ngt --help       # Show help
 ```
-
-Or using the short form:
-
-```bash
-dotnet run --project src/AngularUnitTests.Cli/AngularUnitTests.Cli.csproj -- generate -p /path/to/angular/app
-```
-
-### Example
-
-```bash
-cd /home/runner/work/AngularUnitTests/AngularUnitTests
-dotnet run --project src/AngularUnitTests.Cli/AngularUnitTests.Cli.csproj -- generate --path ~/my-angular-app
-```
-
-## How It Works
-
-1. **Discovery**: The tool scans the specified Angular application directory for TypeScript files (`.ts`)
-2. **Analysis**: Each file is analyzed to determine its type (component, service, directive, etc.)
-3. **Generation**: Jest test files are generated with appropriate test patterns for the file type
-4. **Naming**: If a test file already exists, a discriminating number is added (e.g., `.spec.2.ts`)
-
-## Supported File Types
-
-The CLI automatically detects and generates appropriate tests for:
-
-- **Components** (`.component.ts`) - Generates tests with TestBed, ComponentFixture, lifecycle hooks
-- **Services** (`.service.ts`) - Generates tests with TestBed injection and method testing
-- **Directives** (`.directive.ts`) - Generates tests with host components and DOM manipulation
-- **Pipes** (`.pipe.ts`) - Generates tests for transform methods and edge cases
-- **Guards** (`.guard.ts`) - Generates tests for route protection logic
-- **Interceptors** (`.interceptor.ts`) - Generates tests with HttpTestingController
-- **Resolvers** (`.resolver.ts`) - Generates tests for data resolution
-- **Modules** (`.module.ts`) - Basic structure tests
-- **Models** - Generic tests for data structures
 
 ## Configuration
 
-The tool uses the Options pattern for configuration. Edit `appsettings.json` to customize:
+Create `appsettings.json` in your project to customize behavior:
 
 ```json
 {
   "AngularTestGenerator": {
     "TargetCoveragePercentage": 80,
     "TestFileExtension": ".spec.ts",
-    "TypeScriptExtensions": [".ts"],
-    "ExcludedDirectories": ["node_modules", "dist", ".angular", "coverage"],
-    "GenerateJestConfig": true
+    "ExcludedDirectories": ["node_modules", "dist", ".angular", "coverage"]
   }
 }
 ```
 
-## Architecture
+See [Configuration Guide](docs/configuration.md) for all options.
 
-### Dependency Injection
+## How It Works
 
-The application uses Microsoft.Extensions.DependencyInjection for service registration and lifetime management.
-
-### Logging
-
-Microsoft.Extensions.Logging is configured with console output for tracking test generation progress.
-
-### Configuration
-
-Microsoft.Extensions.Configuration and Options pattern are used for flexible configuration management.
-
-### Command-Line Interface
-
-System.CommandLine provides the command-line interface with:
-- Command structure
-- Option parsing
-- Help generation
-- Type-safe parameter binding
+1. **Discovery** - Scans the directory for TypeScript files, excluding `node_modules`, `dist`, and existing test files
+2. **Analysis** - Determines file type, extracts class names, detects dependencies, and identifies patterns (functional vs class-based)
+3. **Generation** - Creates appropriate test files with TestBed configuration, mocks, and basic test cases
+4. **Naming** - If a test file exists, adds a discriminating number (e.g., `.spec.2.ts`)
 
 ## Project Structure
 
 ```
-src/
-└── AngularUnitTests.Cli/
-    ├── Commands/
-    │   └── GenerateTestsCommand.cs       # CLI command definitions
-    ├── Services/
-    │   ├── TypeScriptFileDiscoveryService.cs   # File discovery logic
-    │   └── JestTestGeneratorService.cs         # Test generation logic
-    ├── Models/
-    │   └── TypeScriptFileInfo.cs         # Data models
-    ├── Configuration/
-    │   └── AngularTestGeneratorOptions.cs      # Configuration options
-    ├── Program.cs                        # Application entry point
-    └── appsettings.json                  # Configuration file
+src/AngularUnitTests.Cli/
+├── Commands/           # CLI command definitions
+├── Services/           # Core services (discovery, generation)
+├── Models/             # Data models
+├── Configuration/      # Options and settings
+└── Program.cs          # Entry point
 ```
 
-## Example Output
+## Development
 
+### Build from Source
+
+```bash
+git clone https://github.com/QuinntyneBrown/AngularUnitTests.git
+cd AngularUnitTests
+dotnet build
 ```
-Found 5 TypeScript file(s) to process.
 
-✓ Generated: app.component.spec.ts
-✓ Generated: user.service.spec.ts
-✓ Generated: auth.guard.spec.ts
-✓ Generated: date-format.pipe.spec.ts
-✓ Generated: highlight.directive.spec.ts
+### Run Tests
 
-Test generation complete:
-  Success: 5
-  Failed: 0
-  Total: 5
+```bash
+dotnet test
 ```
+
+### Install Local Build
+
+```bash
+dotnet pack src/AngularUnitTests.Cli/AngularUnitTests.Cli.csproj -o ./nupkg
+dotnet tool install --global --add-source ./nupkg ngt
+```
+
+## Contributing
+
+Contributions are welcome! See [Contributing Guide](docs/contributing.md) for details.
 
 ## License
 
