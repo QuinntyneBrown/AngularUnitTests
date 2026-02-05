@@ -9,11 +9,11 @@ public class GenerateTestsCommand : Command
 {
     public GenerateTestsCommand() : base("generate", "Generate Jest unit tests for Angular TypeScript files")
     {
-        var pathOption = new Option<string>(
+        var pathOption = new Option<string?>(
             name: "--path",
-            description: "Path to the Angular application directory")
+            description: "Path to the Angular application directory. If not provided, uses the current directory if it's an Angular workspace.")
         {
-            IsRequired = true
+            IsRequired = false
         };
         pathOption.AddAlias("-p");
 
@@ -37,19 +37,28 @@ public class GenerateTestsCommandHandler
         _logger = logger;
     }
 
-    public async Task<int> HandleAsync(string path, CancellationToken cancellationToken)
+    public async Task<int> HandleAsync(string? path, CancellationToken cancellationToken)
     {
         try
         {
-            _logger.LogInformation("Starting test generation for Angular application at: {Path}", path);
-
-            // Validate path
-            if (!Directory.Exists(path))
+            // Resolve the path if not provided
+            var resolvedPath = ResolvePath(path);
+            if (resolvedPath == null)
             {
-                _logger.LogError("Path does not exist: {Path}", path);
-                Console.Error.WriteLine($"Error: Path does not exist: {path}");
                 return 1;
             }
+
+            _logger.LogInformation("Starting test generation for Angular application at: {Path}", resolvedPath);
+
+            // Validate path
+            if (!Directory.Exists(resolvedPath))
+            {
+                _logger.LogError("Path does not exist: {Path}", resolvedPath);
+                Console.Error.WriteLine($"Error: Path does not exist: {resolvedPath}");
+                return 1;
+            }
+
+            path = resolvedPath;
 
             // Discover TypeScript files
             var typeScriptFiles = await _discoveryService.DiscoverTypeScriptFilesAsync(path, cancellationToken);
@@ -111,5 +120,66 @@ public class GenerateTestsCommandHandler
             Console.Error.WriteLine($"Error: {ex.Message}");
             return 1;
         }
+    }
+
+    /// <summary>
+    /// Resolves the path to the Angular workspace.
+    /// If path is provided, returns it.
+    /// If not provided, searches for angular.json in current directory and parent directories.
+    /// </summary>
+    private string? ResolvePath(string? path)
+    {
+        // If path is explicitly provided, use it
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            return Path.GetFullPath(path);
+        }
+
+        // Try to find angular.json starting from current directory
+        var currentDir = Directory.GetCurrentDirectory();
+        var workspaceRoot = FindAngularWorkspaceRoot(currentDir);
+
+        if (workspaceRoot != null)
+        {
+            Console.WriteLine($"Detected Angular workspace at: {workspaceRoot}");
+            return workspaceRoot;
+        }
+
+        // Not in an Angular workspace
+        Console.Error.WriteLine("Error: Not in an Angular workspace. No angular.json found.");
+        Console.Error.WriteLine("Either run this command from within an Angular workspace, or specify the path with --path option.");
+        Console.Error.WriteLine();
+        Console.Error.WriteLine("Usage: ngt generate --path <path-to-angular-app>");
+        return null;
+    }
+
+    /// <summary>
+    /// Searches for angular.json starting from the given directory and walking up the directory tree.
+    /// </summary>
+    private string? FindAngularWorkspaceRoot(string startDirectory)
+    {
+        var currentDir = startDirectory;
+
+        while (!string.IsNullOrEmpty(currentDir))
+        {
+            var angularJsonPath = Path.Combine(currentDir, "angular.json");
+            if (File.Exists(angularJsonPath))
+            {
+                return currentDir;
+            }
+
+            // Move up to parent directory
+            var parentDir = Directory.GetParent(currentDir)?.FullName;
+
+            // Stop if we've reached the root
+            if (parentDir == currentDir)
+            {
+                break;
+            }
+
+            currentDir = parentDir;
+        }
+
+        return null;
     }
 }
