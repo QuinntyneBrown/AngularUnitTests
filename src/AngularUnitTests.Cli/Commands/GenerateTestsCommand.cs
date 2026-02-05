@@ -11,7 +11,7 @@ public class GenerateTestsCommand : Command
     {
         var pathOption = new Option<string?>(
             name: "--path",
-            description: "Path to the Angular application directory. If not provided, uses the current directory if it's an Angular workspace.")
+            description: "Path to generate tests for. If not provided, generates tests for the current directory and its subdirectories (must be within an Angular workspace).")
         {
             IsRequired = false
         };
@@ -123,9 +123,9 @@ public class GenerateTestsCommandHandler
     }
 
     /// <summary>
-    /// Resolves the path to the Angular workspace.
+    /// Resolves the path for test generation.
     /// If path is provided, returns it.
-    /// If not provided, searches for angular.json in current directory and parent directories.
+    /// If not provided, verifies we're in an Angular workspace and returns the current directory.
     /// </summary>
     private string? ResolvePath(string? path)
     {
@@ -142,7 +142,10 @@ public class GenerateTestsCommandHandler
         if (workspaceRoot != null)
         {
             Console.WriteLine($"Detected Angular workspace at: {workspaceRoot}");
-            return workspaceRoot;
+            Console.WriteLine($"Generating tests for: {currentDir}");
+            // Return the current directory, not the workspace root
+            // This ensures tests are only generated for the current folder and its children
+            return currentDir;
         }
 
         // Not in an Angular workspace
