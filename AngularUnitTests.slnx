@@ -2,4 +2,7 @@
   <Folder Name="/src/">
     <Project Path="src/AngularUnitTests.Cli/AngularUnitTests.Cli.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/AngularUnitTests.Cli.Tests/AngularUnitTests.Cli.Tests.csproj" />
+  </Folder>
 </Solution>
