@@ -30,6 +30,23 @@ public class TypeScriptFileDiscoveryService : ITypeScriptFileDiscoveryService
         @"^\s+(?!private|protected)(\w+)\s*\(([^)]*)\)\s*:\s*(Observable<[^>]+>|Promise<[^>]+>|[^{\n]+)",
         RegexOptions.Compiled | RegexOptions.Multiline);
 
+    // Constructor injection patterns
+    private static readonly Regex ConstructorBlockPattern = new(
+        @"constructor\s*\(([\s\S]*?)\)\s*\{",
+        RegexOptions.Compiled);
+    private static readonly Regex ConstructorParamTypePattern = new(
+        @"(?:private|protected|public|readonly)\s+\w+\s*[?!]?\s*:\s*(\w+)",
+        RegexOptions.Compiled);
+    private static readonly Regex InjectDecoratorPattern = new(
+        @"@Inject\s*\(\s*(\w+)\s*\)",
+        RegexOptions.Compiled);
+
+    // Primitive types to skip when extracting constructor dependencies
+    private static readonly HashSet<string> PrimitiveTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "string", "number", "boolean", "any", "void", "object", "unknown", "never", "undefined", "null"
+    };
+
     public TypeScriptFileDiscoveryService(
         ILogger<TypeScriptFileDiscoveryService> logger,
         IOptions<AngularTestGeneratorOptions> options)
@@ -216,8 +233,6 @@ public class TypeScriptFileDiscoveryService : ITypeScriptFileDiscoveryService
                     fileInfo.ExportName = serviceClass.Groups[1].Value;
                     fileInfo.ClassName = serviceClass.Groups[1].Value;
                 }
-                // Extract public methods from service
-                ExtractPublicMethods(fileInfo, content);
                 break;
 
             default:
@@ -239,6 +254,41 @@ public class TypeScriptFileDiscoveryService : ITypeScriptFileDiscoveryService
             {
                 fileInfo.Dependencies.Add(dependency);
             }
+        }
+
+        // Extract dependencies from constructor injection
+        var constructorMatch = ConstructorBlockPattern.Match(content);
+        if (constructorMatch.Success)
+        {
+            var constructorParams = constructorMatch.Groups[1].Value;
+
+            // Extract typed constructor parameters (e.g., private http: HttpClient)
+            var paramTypeMatches = ConstructorParamTypePattern.Matches(constructorParams);
+            foreach (Match match in paramTypeMatches)
+            {
+                var dependency = match.Groups[1].Value;
+                if (!PrimitiveTypes.Contains(dependency) && !fileInfo.Dependencies.Contains(dependency))
+                {
+                    fileInfo.Dependencies.Add(dependency);
+                }
+            }
+
+            // Extract @Inject() decorator dependencies (e.g., @Inject(API_BASE_URL))
+            var injectDecoratorMatches = InjectDecoratorPattern.Matches(constructorParams);
+            foreach (Match match in injectDecoratorMatches)
+            {
+                var dependency = match.Groups[1].Value;
+                if (!fileInfo.Dependencies.Contains(dependency))
+                {
+                    fileInfo.Dependencies.Add(dependency);
+                }
+            }
+        }
+
+        // Extract public methods from all class-based files (needed for dependency mocking)
+        if (ClassPattern.IsMatch(content) && !fileInfo.IsInterfaceOrType)
+        {
+            ExtractPublicMethods(fileInfo, content);
         }
     }
 

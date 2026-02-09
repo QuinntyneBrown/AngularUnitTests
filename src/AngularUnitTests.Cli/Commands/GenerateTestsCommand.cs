@@ -74,6 +74,9 @@ public class GenerateTestsCommandHandler
             Console.WriteLine($"Found {fileList.Count} TypeScript file(s) to process.");
             Console.WriteLine();
 
+            // Provide discovered files to the generator for dependency resolution
+            _generatorService.SetDiscoveredFiles(fileList);
+
             // Generate tests for each file
             var successCount = 0;
             var failureCount = 0;

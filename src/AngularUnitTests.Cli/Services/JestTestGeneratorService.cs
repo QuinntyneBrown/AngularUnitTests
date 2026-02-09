@@ -3,11 +3,13 @@ using AngularUnitTests.Cli.Models;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace AngularUnitTests.Cli.Services;
 
 public interface IJestTestGeneratorService
 {
+    void SetDiscoveredFiles(IReadOnlyList<TypeScriptFileInfo> allFiles);
     Task<string?> GenerateTestFileAsync(TypeScriptFileInfo fileInfo, CancellationToken cancellationToken = default);
 }
 
@@ -16,12 +18,44 @@ public class JestTestGeneratorService : IJestTestGeneratorService
     private readonly ILogger<JestTestGeneratorService> _logger;
     private readonly AngularTestGeneratorOptions _options;
 
+    private IReadOnlyList<TypeScriptFileInfo> _allDiscoveredFiles = Array.Empty<TypeScriptFileInfo>();
+    private Dictionary<string, TypeScriptFileInfo> _dependencyLookup = new();
+
+    // Known Angular framework dependencies handled via test utilities (not custom mocked)
+    private static readonly HashSet<string> AngularFrameworkDeps = new()
+    {
+        "HttpClient", "Router", "ActivatedRoute", "FormBuilder",
+        "ChangeDetectorRef", "ElementRef", "Renderer2", "NgZone",
+        "Injector", "ApplicationRef", "ViewContainerRef", "TemplateRef",
+        "Location", "Title", "Meta", "DOCUMENT"
+    };
+
+    // Known injection tokens (provided with mock values)
+    private static readonly HashSet<string> InjectionTokenDeps = new()
+    {
+        "API_BASE_URL"
+    };
+
+    // Regex for finding import paths in source files
+    private static readonly Regex ImportPathPattern = new(
+        @"import\s*\{[^}]*\b{0}\b[^}]*\}\s*from\s*['""]([^'""]+)['""]",
+        RegexOptions.Compiled);
+
     public JestTestGeneratorService(
         ILogger<JestTestGeneratorService> logger,
         IOptions<AngularTestGeneratorOptions> options)
     {
         _logger = logger;
         _options = options.Value;
+    }
+
+    public void SetDiscoveredFiles(IReadOnlyList<TypeScriptFileInfo> allFiles)
+    {
+        _allDiscoveredFiles = allFiles;
+        _dependencyLookup = allFiles
+            .Where(f => !string.IsNullOrEmpty(f.ClassName))
+            .GroupBy(f => f.ClassName)
+            .ToDictionary(g => g.Key, g => g.First());
     }
 
     public async Task<string?> GenerateTestFileAsync(
@@ -85,32 +119,277 @@ public class JestTestGeneratorService : IJestTestGeneratorService
         };
     }
 
+    // ================================================================
+    // Helper Methods for Dependency Mocking
+    // ================================================================
+
+    /// <summary>
+    /// Returns custom dependencies that need explicit mocking (not framework or token deps).
+    /// </summary>
+    private List<string> GetCustomDependencies(TypeScriptFileInfo fileInfo)
+    {
+        return fileInfo.Dependencies
+            .Where(d => !AngularFrameworkDeps.Contains(d) && !InjectionTokenDeps.Contains(d))
+            .ToList();
+    }
+
+    /// <summary>
+    /// Resolves the import path for a dependency by checking the source file's own imports first,
+    /// then computing a relative path from the discovered files, and falling back to a convention guess.
+    /// </summary>
+    private string GetDependencyImportPath(string sourceFilePath, string dependencyName)
+    {
+        // First: try to find the import path from the source file's own imports
+        var sourceFileInfo = _allDiscoveredFiles.FirstOrDefault(f => f.FilePath == sourceFilePath);
+        if (sourceFileInfo != null && !string.IsNullOrEmpty(sourceFileInfo.FileContent))
+        {
+            var pattern = new Regex($@"import\s*\{{[^}}]*\b{Regex.Escape(dependencyName)}\b[^}}]*\}}\s*from\s*['""]([^'""]+)['""]");
+            var match = pattern.Match(sourceFileInfo.FileContent);
+            if (match.Success)
+            {
+                return match.Groups[1].Value;
+            }
+        }
+
+        // Second: try to find the dependency file in discovered files and compute relative path
+        if (_dependencyLookup.TryGetValue(dependencyName, out var depInfo))
+        {
+            return GetRelativeImportPath(sourceFilePath, depInfo.FilePath);
+        }
+
+        // Fallback: guess based on naming conventions
+        var kebabName = ConvertToKebabCase(dependencyName);
+        return $"../shared/services/{kebabName}";
+    }
+
+    /// <summary>
+    /// Computes a relative TypeScript import path from one file to another.
+    /// </summary>
+    private string GetRelativeImportPath(string fromFilePath, string toFilePath)
+    {
+        var fromDir = Path.GetDirectoryName(fromFilePath)!;
+        var relativePath = Path.GetRelativePath(fromDir, toFilePath);
+        relativePath = relativePath.Replace('\\', '/');
+        if (relativePath.EndsWith(".ts"))
+            relativePath = relativePath[..^3];
+        if (!relativePath.StartsWith("./") && !relativePath.StartsWith("../"))
+            relativePath = "./" + relativePath;
+        return relativePath;
+    }
+
+    /// <summary>
+    /// Converts a PascalCase class name to kebab-case file name.
+    /// e.g., AuthService -> auth.service, TimeEntryService -> time-entry.service
+    /// </summary>
+    private string ConvertToKebabCase(string className)
+    {
+        var sb = new StringBuilder();
+        for (int i = 0; i < className.Length; i++)
+        {
+            if (char.IsUpper(className[i]) && i > 0)
+            {
+                sb.Append('-');
+            }
+            sb.Append(char.ToLower(className[i]));
+        }
+
+        var result = sb.ToString();
+
+        // Convert last type suffix from kebab to dot notation
+        string[] suffixes = { "-service", "-guard", "-interceptor", "-resolver", "-pipe", "-directive", "-component" };
+        foreach (var suffix in suffixes)
+        {
+            if (result.EndsWith(suffix))
+            {
+                result = result[..^suffix.Length] + suffix.Replace("-", ".");
+                break;
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Returns a mock variable name for a dependency class.
+    /// e.g., AuthService -> mockAuthService
+    /// </summary>
+    private string GetMockVarName(string className)
+    {
+        return "mock" + className;
+    }
+
+    /// <summary>
+    /// Looks up the public method names for a dependency class from discovery data.
+    /// </summary>
+    private List<string> GetServiceMethods(string className)
+    {
+        if (_dependencyLookup.TryGetValue(className, out var serviceInfo))
+        {
+            return serviceInfo.PublicMethods.Select(m => m.Name).ToList();
+        }
+        return new List<string>();
+    }
+
+    /// <summary>
+    /// Writes vitest import if custom dependencies need mocking.
+    /// </summary>
+    private void WriteVitestImport(StringBuilder sb, bool needsMocking)
+    {
+        if (needsMocking)
+        {
+            sb.AppendLine("import { vi } from 'vitest';");
+        }
+    }
+
+    /// <summary>
+    /// Writes Angular framework test imports (HttpClient testing, Router, etc.)
+    /// </summary>
+    private void WriteFrameworkImports(StringBuilder sb, TypeScriptFileInfo fileInfo)
+    {
+        var needsHttp = fileInfo.Dependencies.Contains("HttpClient");
+        var needsRouter = fileInfo.Dependencies.Contains("Router") || fileInfo.Dependencies.Contains("ActivatedRoute");
+        var needsApiBaseUrl = fileInfo.Dependencies.Contains("API_BASE_URL");
+
+        if (needsHttp)
+        {
+            sb.AppendLine("import { provideHttpClient } from '@angular/common/http';");
+            sb.AppendLine("import { provideHttpClientTesting } from '@angular/common/http/testing';");
+        }
+        if (needsRouter)
+        {
+            sb.AppendLine("import { provideRouter } from '@angular/router';");
+        }
+        if (needsApiBaseUrl)
+        {
+            var importPath = GetDependencyImportPath(fileInfo.FilePath, "API_BASE_URL");
+            sb.AppendLine($"import {{ API_BASE_URL }} from '{importPath}';");
+        }
+    }
+
+    /// <summary>
+    /// Writes import statements for custom dependencies that will be mocked.
+    /// </summary>
+    private void WriteCustomDepImports(StringBuilder sb, TypeScriptFileInfo fileInfo, List<string> customDeps)
+    {
+        foreach (var dep in customDeps)
+        {
+            var importPath = GetDependencyImportPath(fileInfo.FilePath, dep);
+            sb.AppendLine($"import {{ {dep} }} from '{importPath}';");
+        }
+    }
+
+    /// <summary>
+    /// Writes mock variable declarations for custom dependencies.
+    /// </summary>
+    private void WriteMockDeclarations(StringBuilder sb, List<string> customDeps, string indent)
+    {
+        foreach (var dep in customDeps)
+        {
+            var varName = GetMockVarName(dep);
+            sb.AppendLine($"{indent}let {varName}: any;");
+        }
+    }
+
+    /// <summary>
+    /// Writes mock object creation with vi.fn() for each public method.
+    /// </summary>
+    private void WriteMockCreation(StringBuilder sb, List<string> customDeps, string indent)
+    {
+        foreach (var dep in customDeps)
+        {
+            var varName = GetMockVarName(dep);
+            var methods = GetServiceMethods(dep);
+
+            if (methods.Any())
+            {
+                sb.AppendLine($"{indent}{varName} = {{");
+                foreach (var method in methods)
+                {
+                    sb.AppendLine($"{indent}  {method}: vi.fn(),");
+                }
+                sb.AppendLine($"{indent}}};");
+            }
+            else
+            {
+                sb.AppendLine($"{indent}{varName} = {{}};");
+            }
+            sb.AppendLine();
+        }
+    }
+
+    /// <summary>
+    /// Writes TestBed providers for framework deps, injection tokens, and custom dependency mocks.
+    /// </summary>
+    private void WriteProviders(StringBuilder sb, TypeScriptFileInfo fileInfo, List<string> customDeps, string indent)
+    {
+        var needsHttp = fileInfo.Dependencies.Contains("HttpClient");
+        var needsRouter = fileInfo.Dependencies.Contains("Router") || fileInfo.Dependencies.Contains("ActivatedRoute");
+        var needsApiBaseUrl = fileInfo.Dependencies.Contains("API_BASE_URL");
+
+        sb.AppendLine($"{indent}providers: [");
+
+        if (needsHttp)
+        {
+            sb.AppendLine($"{indent}  provideHttpClient(),");
+            sb.AppendLine($"{indent}  provideHttpClientTesting(),");
+        }
+        if (needsRouter)
+        {
+            sb.AppendLine($"{indent}  provideRouter([]),");
+        }
+        if (needsApiBaseUrl)
+        {
+            sb.AppendLine($"{indent}  {{ provide: API_BASE_URL, useValue: 'http://localhost:3000' }},");
+        }
+        foreach (var dep in customDeps)
+        {
+            var varName = GetMockVarName(dep);
+            sb.AppendLine($"{indent}  {{ provide: {dep}, useValue: {varName} }},");
+        }
+
+        sb.AppendLine($"{indent}],");
+    }
+
+    /// <summary>
+    /// Returns true if the file has any dependencies that need providers.
+    /// </summary>
+    private bool HasAnyDependencies(TypeScriptFileInfo fileInfo)
+    {
+        return fileInfo.Dependencies.Any();
+    }
+
+    // ================================================================
+    // Test Generator Methods
+    // ================================================================
+
     private string GenerateComponentTest(TypeScriptFileInfo fileInfo)
     {
         var sb = new StringBuilder();
         var relativePath = $"./{Path.GetFileName(fileInfo.FilePath)}".Replace(".ts", "");
         var className = fileInfo.ClassName;
+        var customDeps = GetCustomDependencies(fileInfo);
+        var hasDeps = HasAnyDependencies(fileInfo);
 
+        // Imports
         sb.AppendLine("import { ComponentFixture, TestBed } from '@angular/core/testing';");
-
-        // Add provider mocking if needed
-        if (fileInfo.Dependencies.Any())
-        {
-            sb.AppendLine("import { provideHttpClient } from '@angular/common/http';");
-            sb.AppendLine("import { provideHttpClientTesting } from '@angular/common/http/testing';");
-            if (fileInfo.Dependencies.Contains("Router"))
-            {
-                sb.AppendLine("import { provideRouter } from '@angular/router';");
-            }
-        }
-
+        WriteVitestImport(sb, customDeps.Any());
+        WriteFrameworkImports(sb, fileInfo);
+        WriteCustomDepImports(sb, fileInfo, customDeps);
         sb.AppendLine($"import {{ {className} }} from '{relativePath}';");
         sb.AppendLine();
+
+        // Describe block
         sb.AppendLine($"describe('{className}', () => {{");
         sb.AppendLine($"  let component: {className};");
         sb.AppendLine($"  let fixture: ComponentFixture<{className}>;");
+        WriteMockDeclarations(sb, customDeps, "  ");
         sb.AppendLine();
+
         sb.AppendLine("  beforeEach(async () => {");
+
+        // Create mocks
+        WriteMockCreation(sb, customDeps, "    ");
+
         sb.AppendLine("    await TestBed.configureTestingModule({");
 
         if (fileInfo.IsStandalone)
@@ -122,16 +401,9 @@ public class JestTestGeneratorService : IJestTestGeneratorService
             sb.AppendLine($"      declarations: [{className}],");
         }
 
-        if (fileInfo.Dependencies.Any())
+        if (hasDeps)
         {
-            sb.AppendLine("      providers: [");
-            sb.AppendLine("        provideHttpClient(),");
-            sb.AppendLine("        provideHttpClientTesting(),");
-            if (fileInfo.Dependencies.Contains("Router"))
-            {
-                sb.AppendLine("        provideRouter([]),");
-            }
-            sb.AppendLine("      ],");
+            WriteProviders(sb, fileInfo, customDeps, "      ");
         }
 
         sb.AppendLine("    }).compileComponents();");
@@ -159,12 +431,14 @@ public class JestTestGeneratorService : IJestTestGeneratorService
         var relativePath = $"./{Path.GetFileName(fileInfo.FilePath)}".Replace(".ts", "");
         var className = fileInfo.ClassName;
 
-        sb.AppendLine("import { TestBed } from '@angular/core/testing';");
-
-        // Add HttpClient testing if needed
         var needsHttp = fileInfo.Dependencies.Contains("HttpClient");
         var needsRouter = fileInfo.Dependencies.Contains("Router");
         var needsApiBaseUrl = fileInfo.Dependencies.Contains("API_BASE_URL");
+        var customDeps = GetCustomDependencies(fileInfo);
+
+        // Imports
+        sb.AppendLine("import { TestBed } from '@angular/core/testing';");
+        WriteVitestImport(sb, customDeps.Any());
 
         if (needsHttp)
         {
@@ -177,13 +451,15 @@ public class JestTestGeneratorService : IJestTestGeneratorService
         }
         if (needsApiBaseUrl)
         {
-            // Try to determine the API config path based on file location
-            var apiConfigPath = DetermineApiConfigPath(fileInfo.FilePath);
+            var apiConfigPath = GetDependencyImportPath(fileInfo.FilePath, "API_BASE_URL");
             sb.AppendLine($"import {{ API_BASE_URL }} from '{apiConfigPath}';");
         }
 
+        WriteCustomDepImports(sb, fileInfo, customDeps);
         sb.AppendLine($"import {{ {className} }} from '{relativePath}';");
         sb.AppendLine();
+
+        // Describe block
         sb.AppendLine($"describe('{className}', () => {{");
         sb.AppendLine($"  let service: {className};");
 
@@ -195,9 +471,14 @@ public class JestTestGeneratorService : IJestTestGeneratorService
         {
             sb.AppendLine("  let router: Router;");
         }
+        WriteMockDeclarations(sb, customDeps, "  ");
 
         sb.AppendLine();
         sb.AppendLine("  beforeEach(() => {");
+
+        // Create mocks for custom deps
+        WriteMockCreation(sb, customDeps, "    ");
+
         sb.AppendLine("    TestBed.configureTestingModule({");
         sb.AppendLine("      providers: [");
 
@@ -210,11 +491,14 @@ public class JestTestGeneratorService : IJestTestGeneratorService
         {
             sb.AppendLine("        provideRouter([]),");
         }
-
-        // Handle API_BASE_URL injection token
         if (needsApiBaseUrl)
         {
             sb.AppendLine("        { provide: API_BASE_URL, useValue: 'http://localhost:3000' },");
+        }
+        foreach (var dep in customDeps)
+        {
+            var varName = GetMockVarName(dep);
+            sb.AppendLine($"        {{ provide: {dep}, useValue: {varName} }},");
         }
 
         sb.AppendLine("      ],");
@@ -342,38 +626,19 @@ public class JestTestGeneratorService : IJestTestGeneratorService
         return "{} as any";
     }
 
-    private string DetermineApiConfigPath(string filePath)
-    {
-        // Calculate relative path to config/api.config based on file location
-        // This is a simplified approach - could be enhanced with actual file search
-        var directory = Path.GetDirectoryName(filePath) ?? "";
-        var depth = 0;
-
-        // Count how many directories up we need to go to reach shared/config
-        while (!directory.EndsWith("shared") && !directory.EndsWith("app") && depth < 10)
-        {
-            directory = Path.GetDirectoryName(directory) ?? "";
-            depth++;
-        }
-
-        // If in shared folder, config is a sibling
-        if (directory.EndsWith("shared"))
-        {
-            return "../config/api.config";
-        }
-
-        // Default to a common path
-        return "../shared/config/api.config";
-    }
-
     private string GenerateDirectiveTest(TypeScriptFileInfo fileInfo)
     {
         var sb = new StringBuilder();
         var relativePath = $"./{Path.GetFileName(fileInfo.FilePath)}".Replace(".ts", "");
         var className = fileInfo.ClassName;
+        var customDeps = GetCustomDependencies(fileInfo);
+        var hasDeps = HasAnyDependencies(fileInfo);
 
         sb.AppendLine("import { TestBed, ComponentFixture } from '@angular/core/testing';");
         sb.AppendLine("import { Component } from '@angular/core';");
+        WriteVitestImport(sb, customDeps.Any());
+        WriteFrameworkImports(sb, fileInfo);
+        WriteCustomDepImports(sb, fileInfo, customDeps);
         sb.AppendLine($"import {{ {className} }} from '{relativePath}';");
         sb.AppendLine();
         sb.AppendLine("@Component({");
@@ -385,10 +650,20 @@ public class JestTestGeneratorService : IJestTestGeneratorService
         sb.AppendLine();
         sb.AppendLine($"describe('{className}', () => {{");
         sb.AppendLine("  let fixture: ComponentFixture<TestHostComponent>;");
+        WriteMockDeclarations(sb, customDeps, "  ");
         sb.AppendLine();
         sb.AppendLine("  beforeEach(async () => {");
+
+        WriteMockCreation(sb, customDeps, "    ");
+
         sb.AppendLine("    await TestBed.configureTestingModule({");
         sb.AppendLine("      imports: [TestHostComponent],");
+
+        if (hasDeps)
+        {
+            WriteProviders(sb, fileInfo, customDeps, "      ");
+        }
+
         sb.AppendLine("    }).compileComponents();");
         sb.AppendLine();
         sb.AppendLine("    fixture = TestBed.createComponent(TestHostComponent);");
@@ -413,15 +688,43 @@ public class JestTestGeneratorService : IJestTestGeneratorService
         var sb = new StringBuilder();
         var relativePath = $"./{Path.GetFileName(fileInfo.FilePath)}".Replace(".ts", "");
         var className = fileInfo.ClassName;
+        var customDeps = GetCustomDependencies(fileInfo);
+        var hasDeps = HasAnyDependencies(fileInfo);
 
-        sb.AppendLine($"import {{ {className} }} from '{relativePath}';");
-        sb.AppendLine();
-        sb.AppendLine($"describe('{className}', () => {{");
-        sb.AppendLine($"  let pipe: {className};");
-        sb.AppendLine();
-        sb.AppendLine("  beforeEach(() => {");
-        sb.AppendLine($"    pipe = new {className}();");
-        sb.AppendLine("  });");
+        if (hasDeps)
+        {
+            // Pipe with dependencies: use TestBed
+            sb.AppendLine("import { TestBed } from '@angular/core/testing';");
+            WriteVitestImport(sb, customDeps.Any());
+            WriteFrameworkImports(sb, fileInfo);
+            WriteCustomDepImports(sb, fileInfo, customDeps);
+            sb.AppendLine($"import {{ {className} }} from '{relativePath}';");
+            sb.AppendLine();
+            sb.AppendLine($"describe('{className}', () => {{");
+            sb.AppendLine($"  let pipe: {className};");
+            WriteMockDeclarations(sb, customDeps, "  ");
+            sb.AppendLine();
+            sb.AppendLine("  beforeEach(() => {");
+            WriteMockCreation(sb, customDeps, "    ");
+            sb.AppendLine("    TestBed.configureTestingModule({");
+            WriteProviders(sb, fileInfo, customDeps, "      ");
+            sb.AppendLine("    });");
+            sb.AppendLine($"    pipe = TestBed.inject({className});");
+            sb.AppendLine("  });");
+        }
+        else
+        {
+            // Simple pipe: direct instantiation
+            sb.AppendLine($"import {{ {className} }} from '{relativePath}';");
+            sb.AppendLine();
+            sb.AppendLine($"describe('{className}', () => {{");
+            sb.AppendLine($"  let pipe: {className};");
+            sb.AppendLine();
+            sb.AppendLine("  beforeEach(() => {");
+            sb.AppendLine($"    pipe = new {className}();");
+            sb.AppendLine("  });");
+        }
+
         sb.AppendLine();
         sb.AppendLine("  it('should create pipe', () => {");
         sb.AppendLine("    expect(pipe).toBeTruthy();");
@@ -441,93 +744,52 @@ public class JestTestGeneratorService : IJestTestGeneratorService
         var sb = new StringBuilder();
         var relativePath = $"./{Path.GetFileName(fileInfo.FilePath)}".Replace(".ts", "");
         var exportName = fileInfo.ExportName;
+        var customDeps = GetCustomDependencies(fileInfo);
 
         if (fileInfo.IsFunctional)
         {
-            // Functional guard test using TestBed.runInInjectionContext (Vitest compatible)
+            // Functional guard test using TestBed.runInInjectionContext
             sb.AppendLine("import { TestBed } from '@angular/core/testing';");
             sb.AppendLine("import { provideRouter, Router, ActivatedRouteSnapshot, RouterStateSnapshot } from '@angular/router';");
-            sb.AppendLine("import { vi, Mock } from 'vitest';");
-
-            if (fileInfo.Dependencies.Contains("AuthService"))
-            {
-                sb.AppendLine("import { AuthService } from '../../shared/services/auth.service';");
-            }
-
+            WriteVitestImport(sb, customDeps.Any());
+            WriteCustomDepImports(sb, fileInfo, customDeps);
             sb.AppendLine($"import {{ {exportName} }} from '{relativePath}';");
             sb.AppendLine();
             sb.AppendLine($"describe('{exportName}', () => {{");
 
-            // Create mock services using Vitest
-            if (fileInfo.Dependencies.Contains("AuthService"))
-            {
-                sb.AppendLine("  let mockAuthService: {");
-                sb.AppendLine("    hasValidToken: Mock;");
-                sb.AppendLine("    setRedirectUrl: Mock;");
-                sb.AppendLine("  };");
-            }
+            WriteMockDeclarations(sb, customDeps, "  ");
             sb.AppendLine("  let router: Router;");
             sb.AppendLine();
             sb.AppendLine("  beforeEach(() => {");
 
-            if (fileInfo.Dependencies.Contains("AuthService"))
-            {
-                sb.AppendLine("    mockAuthService = {");
-                sb.AppendLine("      hasValidToken: vi.fn(),");
-                sb.AppendLine("      setRedirectUrl: vi.fn(),");
-                sb.AppendLine("    };");
-            }
+            WriteMockCreation(sb, customDeps, "    ");
 
-            sb.AppendLine();
             sb.AppendLine("    TestBed.configureTestingModule({");
             sb.AppendLine("      providers: [");
             sb.AppendLine("        provideRouter([]),");
-
-            if (fileInfo.Dependencies.Contains("AuthService"))
+            foreach (var dep in customDeps)
             {
-                sb.AppendLine("        { provide: AuthService, useValue: mockAuthService },");
+                var varName = GetMockVarName(dep);
+                sb.AppendLine($"        {{ provide: {dep}, useValue: {varName} }},");
             }
-
             sb.AppendLine("      ],");
             sb.AppendLine("    });");
             sb.AppendLine();
             sb.AppendLine("    router = TestBed.inject(Router);");
             sb.AppendLine("  });");
             sb.AppendLine();
-            sb.AppendLine("  it('should allow activation when authenticated', () => {");
-
-            if (fileInfo.Dependencies.Contains("AuthService"))
-            {
-                sb.AppendLine("    mockAuthService.hasValidToken.mockReturnValue(true);");
-            }
-
+            sb.AppendLine("  it('should be defined', () => {");
+            sb.AppendLine($"    expect({exportName}).toBeDefined();");
+            sb.AppendLine("  });");
             sb.AppendLine();
+            sb.AppendLine("  it('should return a result when executed', () => {");
             sb.AppendLine("    const result = TestBed.runInInjectionContext(() => {");
             sb.AppendLine("      const mockRoute = {} as ActivatedRouteSnapshot;");
             sb.AppendLine("      const mockState = { url: '/test' } as RouterStateSnapshot;");
             sb.AppendLine($"      return {exportName}(mockRoute, mockState);");
             sb.AppendLine("    });");
             sb.AppendLine();
-            sb.AppendLine("    expect(result).toBe(true);");
-            sb.AppendLine("  });");
-            sb.AppendLine();
-            sb.AppendLine("  it('should deny activation when not authenticated', () => {");
-
-            if (fileInfo.Dependencies.Contains("AuthService"))
-            {
-                sb.AppendLine("    mockAuthService.hasValidToken.mockReturnValue(false);");
-            }
-
-            sb.AppendLine("    const navigateSpy = vi.spyOn(router, 'navigate').mockImplementation(() => Promise.resolve(true));");
-            sb.AppendLine();
-            sb.AppendLine("    const result = TestBed.runInInjectionContext(() => {");
-            sb.AppendLine("      const mockRoute = {} as ActivatedRouteSnapshot;");
-            sb.AppendLine("      const mockState = { url: '/protected' } as RouterStateSnapshot;");
-            sb.AppendLine($"      return {exportName}(mockRoute, mockState);");
-            sb.AppendLine("    });");
-            sb.AppendLine();
-            sb.AppendLine("    expect(result).toBe(false);");
-            sb.AppendLine("    expect(navigateSpy).toHaveBeenCalledWith(['/login']);");
+            sb.AppendLine("    expect(result).toBeDefined();");
             sb.AppendLine("  });");
             sb.AppendLine("});");
         }
@@ -535,15 +797,30 @@ public class JestTestGeneratorService : IJestTestGeneratorService
         {
             // Class-based guard test
             var className = fileInfo.ClassName;
+
             sb.AppendLine("import { TestBed } from '@angular/core/testing';");
+            WriteVitestImport(sb, customDeps.Any());
+            WriteFrameworkImports(sb, fileInfo);
+            WriteCustomDepImports(sb, fileInfo, customDeps);
             sb.AppendLine($"import {{ {className} }} from '{relativePath}';");
             sb.AppendLine();
             sb.AppendLine($"describe('{className}', () => {{");
             sb.AppendLine($"  let guard: {className};");
+            WriteMockDeclarations(sb, customDeps, "  ");
             sb.AppendLine();
             sb.AppendLine("  beforeEach(() => {");
+            WriteMockCreation(sb, customDeps, "    ");
             sb.AppendLine("    TestBed.configureTestingModule({");
-            sb.AppendLine($"      providers: [{className}],");
+
+            if (HasAnyDependencies(fileInfo))
+            {
+                WriteProviders(sb, fileInfo, customDeps, "      ");
+            }
+            else
+            {
+                sb.AppendLine($"      providers: [{className}],");
+            }
+
             sb.AppendLine("    });");
             sb.AppendLine($"    guard = TestBed.inject({className});");
             sb.AppendLine("  });");
@@ -562,62 +839,38 @@ public class JestTestGeneratorService : IJestTestGeneratorService
         var sb = new StringBuilder();
         var relativePath = $"./{Path.GetFileName(fileInfo.FilePath)}".Replace(".ts", "");
         var exportName = fileInfo.ExportName;
+        var customDeps = GetCustomDependencies(fileInfo);
 
         if (fileInfo.IsFunctional)
         {
-            // Functional interceptor test (Vitest compatible)
+            // Functional interceptor test
             sb.AppendLine("import { TestBed } from '@angular/core/testing';");
             sb.AppendLine("import { HttpClient, provideHttpClient, withInterceptors } from '@angular/common/http';");
             sb.AppendLine("import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';");
             sb.AppendLine("import { provideRouter } from '@angular/router';");
-            sb.AppendLine("import { vi, Mock } from 'vitest';");
-
-            if (fileInfo.Dependencies.Contains("AuthService"))
-            {
-                sb.AppendLine("import { AuthService } from '../../shared/services/auth.service';");
-            }
-
+            WriteVitestImport(sb, customDeps.Any());
+            WriteCustomDepImports(sb, fileInfo, customDeps);
             sb.AppendLine($"import {{ {exportName} }} from '{relativePath}';");
             sb.AppendLine();
             sb.AppendLine($"describe('{exportName}', () => {{");
             sb.AppendLine("  let httpClient: HttpClient;");
             sb.AppendLine("  let httpMock: HttpTestingController;");
-
-            if (fileInfo.Dependencies.Contains("AuthService"))
-            {
-                sb.AppendLine("  let mockAuthService: {");
-                sb.AppendLine("    getAccessToken: Mock;");
-                sb.AppendLine("    getRefreshToken: Mock;");
-                sb.AppendLine("    refreshToken: Mock;");
-                sb.AppendLine("    logout: Mock;");
-                sb.AppendLine("    setRedirectUrl: Mock;");
-                sb.AppendLine("  };");
-            }
-
+            WriteMockDeclarations(sb, customDeps, "  ");
             sb.AppendLine();
             sb.AppendLine("  beforeEach(() => {");
 
-            if (fileInfo.Dependencies.Contains("AuthService"))
-            {
-                sb.AppendLine("    mockAuthService = {");
-                sb.AppendLine("      getAccessToken: vi.fn(),");
-                sb.AppendLine("      getRefreshToken: vi.fn(),");
-                sb.AppendLine("      refreshToken: vi.fn(),");
-                sb.AppendLine("      logout: vi.fn(),");
-                sb.AppendLine("      setRedirectUrl: vi.fn(),");
-                sb.AppendLine("    };");
-            }
+            WriteMockCreation(sb, customDeps, "    ");
 
-            sb.AppendLine();
             sb.AppendLine("    TestBed.configureTestingModule({");
             sb.AppendLine("      providers: [");
             sb.AppendLine($"        provideHttpClient(withInterceptors([{exportName}])),");
             sb.AppendLine("        provideHttpClientTesting(),");
             sb.AppendLine("        provideRouter([]),");
 
-            if (fileInfo.Dependencies.Contains("AuthService"))
+            foreach (var dep in customDeps)
             {
-                sb.AppendLine("        { provide: AuthService, useValue: mockAuthService },");
+                var varName = GetMockVarName(dep);
+                sb.AppendLine($"        {{ provide: {dep}, useValue: {varName} }},");
             }
 
             sb.AppendLine("      ],");
@@ -631,33 +884,11 @@ public class JestTestGeneratorService : IJestTestGeneratorService
             sb.AppendLine("    httpMock.verify();");
             sb.AppendLine("  });");
             sb.AppendLine();
-            sb.AppendLine("  it('should add auth header to requests', () => {");
-
-            if (fileInfo.Dependencies.Contains("AuthService"))
-            {
-                sb.AppendLine("    mockAuthService.getAccessToken.mockReturnValue('test-token');");
-            }
-
-            sb.AppendLine();
+            sb.AppendLine("  it('should intercept requests', () => {");
             sb.AppendLine("    httpClient.get('/api/test').subscribe();");
             sb.AppendLine();
             sb.AppendLine("    const req = httpMock.expectOne('/api/test');");
-            sb.AppendLine("    expect(req.request.headers.has('Authorization')).toBe(true);");
-            sb.AppendLine("    req.flush({});");
-            sb.AppendLine("  });");
-            sb.AppendLine();
-            sb.AppendLine("  it('should skip auth header for login endpoint', () => {");
-
-            if (fileInfo.Dependencies.Contains("AuthService"))
-            {
-                sb.AppendLine("    mockAuthService.getAccessToken.mockReturnValue('test-token');");
-            }
-
-            sb.AppendLine();
-            sb.AppendLine("    httpClient.post('/api/auth/login', {}).subscribe();");
-            sb.AppendLine();
-            sb.AppendLine("    const req = httpMock.expectOne('/api/auth/login');");
-            sb.AppendLine("    expect(req.request.headers.has('Authorization')).toBe(false);");
+            sb.AppendLine("    expect(req.request.method).toBe('GET');");
             sb.AppendLine("    req.flush({});");
             sb.AppendLine("  });");
             sb.AppendLine("});");
@@ -666,18 +897,44 @@ public class JestTestGeneratorService : IJestTestGeneratorService
         {
             // Class-based interceptor test
             var className = fileInfo.ClassName;
+
             sb.AppendLine("import { TestBed } from '@angular/core/testing';");
-            sb.AppendLine("import { HttpClientTestingModule, HttpTestingController } from '@angular/common/http/testing';");
+            sb.AppendLine("import { provideHttpClient } from '@angular/common/http';");
+            sb.AppendLine("import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';");
+            WriteVitestImport(sb, customDeps.Any());
+            WriteFrameworkImports(sb, fileInfo);
+            WriteCustomDepImports(sb, fileInfo, customDeps);
             sb.AppendLine($"import {{ {className} }} from '{relativePath}';");
             sb.AppendLine();
             sb.AppendLine($"describe('{className}', () => {{");
             sb.AppendLine($"  let interceptor: {className};");
             sb.AppendLine("  let httpMock: HttpTestingController;");
+            WriteMockDeclarations(sb, customDeps, "  ");
             sb.AppendLine();
             sb.AppendLine("  beforeEach(() => {");
+            WriteMockCreation(sb, customDeps, "    ");
             sb.AppendLine("    TestBed.configureTestingModule({");
-            sb.AppendLine("      imports: [HttpClientTestingModule],");
-            sb.AppendLine($"      providers: [{className}],");
+            sb.AppendLine("      providers: [");
+            sb.AppendLine("        provideHttpClient(),");
+            sb.AppendLine("        provideHttpClientTesting(),");
+
+            var needsRouter = fileInfo.Dependencies.Contains("Router") || fileInfo.Dependencies.Contains("ActivatedRoute");
+            if (needsRouter)
+            {
+                sb.AppendLine("        provideRouter([]),");
+            }
+            if (fileInfo.Dependencies.Contains("API_BASE_URL"))
+            {
+                sb.AppendLine("        { provide: API_BASE_URL, useValue: 'http://localhost:3000' },");
+            }
+            foreach (var dep in customDeps)
+            {
+                var varName = GetMockVarName(dep);
+                sb.AppendLine($"        {{ provide: {dep}, useValue: {varName} }},");
+            }
+            sb.AppendLine($"        {className},");
+
+            sb.AppendLine("      ],");
             sb.AppendLine("    });");
             sb.AppendLine($"    interceptor = TestBed.inject({className});");
             sb.AppendLine("    httpMock = TestBed.inject(HttpTestingController);");
@@ -701,17 +958,31 @@ public class JestTestGeneratorService : IJestTestGeneratorService
         var sb = new StringBuilder();
         var relativePath = $"./{Path.GetFileName(fileInfo.FilePath)}".Replace(".ts", "");
         var exportName = fileInfo.ExportName;
+        var customDeps = GetCustomDependencies(fileInfo);
 
         if (fileInfo.IsFunctional)
         {
             // Functional resolver test
             sb.AppendLine("import { TestBed } from '@angular/core/testing';");
             sb.AppendLine("import { ActivatedRouteSnapshot, RouterStateSnapshot } from '@angular/router';");
+            WriteVitestImport(sb, customDeps.Any());
+            WriteFrameworkImports(sb, fileInfo);
+            WriteCustomDepImports(sb, fileInfo, customDeps);
             sb.AppendLine($"import {{ {exportName} }} from '{relativePath}';");
             sb.AppendLine();
             sb.AppendLine($"describe('{exportName}', () => {{");
+            WriteMockDeclarations(sb, customDeps, "  ");
+            sb.AppendLine();
             sb.AppendLine("  beforeEach(() => {");
-            sb.AppendLine("    TestBed.configureTestingModule({});");
+            WriteMockCreation(sb, customDeps, "    ");
+            sb.AppendLine("    TestBed.configureTestingModule({");
+
+            if (HasAnyDependencies(fileInfo))
+            {
+                WriteProviders(sb, fileInfo, customDeps, "      ");
+            }
+
+            sb.AppendLine("    });");
             sb.AppendLine("  });");
             sb.AppendLine();
             sb.AppendLine("  it('should resolve data', () => {");
@@ -729,15 +1000,30 @@ public class JestTestGeneratorService : IJestTestGeneratorService
         {
             // Class-based resolver test
             var className = fileInfo.ClassName;
+
             sb.AppendLine("import { TestBed } from '@angular/core/testing';");
+            WriteVitestImport(sb, customDeps.Any());
+            WriteFrameworkImports(sb, fileInfo);
+            WriteCustomDepImports(sb, fileInfo, customDeps);
             sb.AppendLine($"import {{ {className} }} from '{relativePath}';");
             sb.AppendLine();
             sb.AppendLine($"describe('{className}', () => {{");
             sb.AppendLine($"  let resolver: {className};");
+            WriteMockDeclarations(sb, customDeps, "  ");
             sb.AppendLine();
             sb.AppendLine("  beforeEach(() => {");
+            WriteMockCreation(sb, customDeps, "    ");
             sb.AppendLine("    TestBed.configureTestingModule({");
-            sb.AppendLine($"      providers: [{className}],");
+
+            if (HasAnyDependencies(fileInfo))
+            {
+                WriteProviders(sb, fileInfo, customDeps, "      ");
+            }
+            else
+            {
+                sb.AppendLine($"      providers: [{className}],");
+            }
+
             sb.AppendLine("    });");
             sb.AppendLine($"    resolver = TestBed.inject({className});");
             sb.AppendLine("  });");

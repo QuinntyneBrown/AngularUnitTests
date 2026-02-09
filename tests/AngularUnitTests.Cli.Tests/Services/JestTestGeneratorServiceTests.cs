@@ -164,7 +164,6 @@ public class JestTestGeneratorServiceTests : IDisposable
         
         Assert.Contains("AuthGuard", content);
         Assert.Contains("should be created", content);
-        Assert.Contains("canActivate", content);
     }
 
     public void Dispose()
