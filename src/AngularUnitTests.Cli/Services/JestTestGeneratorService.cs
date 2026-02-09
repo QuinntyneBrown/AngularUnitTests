@@ -561,7 +561,14 @@ public class JestTestGeneratorService : IJestTestGeneratorService
                           methodName.StartsWith("login") || methodName.StartsWith("Login") ||
                           methodName.StartsWith("logout") || methodName.StartsWith("Logout") ||
                           methodName.StartsWith("register") || methodName.StartsWith("Register") ||
-                          methodName.StartsWith("refresh") || methodName.StartsWith("Refresh");
+                          methodName.StartsWith("refresh") || methodName.StartsWith("Refresh") ||
+                          methodName.StartsWith("mark") || methodName.StartsWith("Mark") ||
+                          methodName.StartsWith("void") || methodName.StartsWith("Void") ||
+                          methodName.StartsWith("send") || methodName.StartsWith("Send") ||
+                          methodName.StartsWith("submit") || methodName.StartsWith("Submit") ||
+                          methodName.StartsWith("approve") || methodName.StartsWith("Approve") ||
+                          methodName.StartsWith("reject") || methodName.StartsWith("Reject") ||
+                          methodName.StartsWith("cancel") || methodName.StartsWith("Cancel");
         var isPutMethod = methodName.StartsWith("update") || methodName.StartsWith("Update");
         var isDeleteMethod = methodName.StartsWith("delete") || methodName.StartsWith("Delete") ||
                             methodName.StartsWith("remove") || methodName.StartsWith("Remove");
