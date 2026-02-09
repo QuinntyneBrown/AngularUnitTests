@@ -1077,14 +1077,42 @@ public class JestTestGeneratorService : IJestTestGeneratorService
         var sb = new StringBuilder();
         var relativePath = $"./{Path.GetFileName(fileInfo.FilePath)}".Replace(".ts", "");
         var className = fileInfo.ClassName;
+        var customDeps = GetCustomDependencies(fileInfo);
+        var hasDeps = HasAnyDependencies(fileInfo);
 
-        sb.AppendLine($"import {{ {className} }} from '{relativePath}';");
-        sb.AppendLine();
-        sb.AppendLine($"describe('{className}', () => {{");
-        sb.AppendLine("  it('should be defined', () => {");
-        sb.AppendLine($"    expect({className}).toBeDefined();");
-        sb.AppendLine("  });");
-        sb.AppendLine("});");
+        if (hasDeps)
+        {
+            sb.AppendLine("import { TestBed } from '@angular/core/testing';");
+            WriteVitestImport(sb, customDeps.Any());
+            WriteFrameworkImports(sb, fileInfo);
+            WriteCustomDepImports(sb, fileInfo, customDeps);
+            sb.AppendLine($"import {{ {className} }} from '{relativePath}';");
+            sb.AppendLine();
+            sb.AppendLine($"describe('{className}', () => {{");
+            WriteMockDeclarations(sb, customDeps, "  ");
+            sb.AppendLine();
+            sb.AppendLine("  beforeEach(() => {");
+            WriteMockCreation(sb, customDeps, "    ");
+            sb.AppendLine("    TestBed.configureTestingModule({");
+            WriteProviders(sb, fileInfo, customDeps, "      ");
+            sb.AppendLine("    });");
+            sb.AppendLine("  });");
+            sb.AppendLine();
+            sb.AppendLine("  it('should be defined', () => {");
+            sb.AppendLine($"    expect({className}).toBeDefined();");
+            sb.AppendLine("  });");
+            sb.AppendLine("});");
+        }
+        else
+        {
+            sb.AppendLine($"import {{ {className} }} from '{relativePath}';");
+            sb.AppendLine();
+            sb.AppendLine($"describe('{className}', () => {{");
+            sb.AppendLine("  it('should be defined', () => {");
+            sb.AppendLine($"    expect({className}).toBeDefined();");
+            sb.AppendLine("  });");
+            sb.AppendLine("});");
+        }
 
         return sb.ToString();
     }

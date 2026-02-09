@@ -23,7 +23,7 @@ public class TypeScriptFileDiscoveryService : ITypeScriptFileDiscoveryService
     private static readonly Regex ClassPattern = new(@"export\s+class\s+(\w+)", RegexOptions.Compiled);
     private static readonly Regex InterfacePattern = new(@"export\s+interface\s+(\w+)", RegexOptions.Compiled);
     private static readonly Regex TypeAliasPattern = new(@"export\s+type\s+(\w+)", RegexOptions.Compiled);
-    private static readonly Regex InjectPattern = new(@"inject\s*\(\s*(\w+)\s*\)", RegexOptions.Compiled);
+    private static readonly Regex InjectPattern = new(@"inject\s*(?:<[^>]+>)?\s*\(\s*(\w+)\s*[,)]", RegexOptions.Compiled);
     private static readonly Regex StandalonePattern = new(@"standalone\s*:\s*true", RegexOptions.Compiled);
     // Method pattern: captures method name, parameters, and return type
     private static readonly Regex PublicMethodPattern = new(
@@ -35,7 +35,7 @@ public class TypeScriptFileDiscoveryService : ITypeScriptFileDiscoveryService
         @"constructor\s*\(([\s\S]*?)\)\s*\{",
         RegexOptions.Compiled);
     private static readonly Regex ConstructorParamTypePattern = new(
-        @"(?:private|protected|public|readonly)\s+\w+\s*[?!]?\s*:\s*(\w+)",
+        @"(?:(?:private|protected|public)\s+(?:readonly\s+)?|readonly\s+)\w+\s*[?!]?\s*:\s*(\w+)",
         RegexOptions.Compiled);
     private static readonly Regex InjectDecoratorPattern = new(
         @"@Inject\s*\(\s*(\w+)\s*\)",

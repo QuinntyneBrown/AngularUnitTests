@@ -166,6 +166,177 @@ public class JestTestGeneratorServiceTests : IDisposable
         Assert.Contains("should be created", content);
     }
 
+    [Fact]
+    public async Task GenerateTestFileAsync_ComponentWithDependencies_MocksAllDeps()
+    {
+        // Arrange
+        var componentFile = Path.Combine(_testDirectory, "login.component.ts");
+        File.WriteAllText(componentFile, "// component");
+
+        var fileInfo = new TypeScriptFileInfo
+        {
+            FilePath = componentFile,
+            FileName = "login.component",
+            FileType = TypeScriptFileType.Component,
+            ClassName = "LoginComponent",
+            IsStandalone = true,
+            ExistingTestFileCount = 0,
+            Dependencies = new List<string> { "AuthService", "Router" }
+        };
+
+        // Set up discovered files so mock methods can be resolved
+        var authServiceInfo = new TypeScriptFileInfo
+        {
+            FilePath = Path.Combine(_testDirectory, "auth.service.ts"),
+            FileName = "auth.service",
+            FileType = TypeScriptFileType.Service,
+            ClassName = "AuthService",
+            PublicMethods = new List<MethodInfo>
+            {
+                new() { Name = "login", ReturnType = "Observable<any>" },
+                new() { Name = "logout", ReturnType = "void" }
+            }
+        };
+        _service.SetDiscoveredFiles(new List<TypeScriptFileInfo> { fileInfo, authServiceInfo });
+
+        // Act
+        var testFilePath = await _service.GenerateTestFileAsync(fileInfo);
+
+        // Assert
+        var content = await File.ReadAllTextAsync(testFilePath!);
+        Assert.Contains("mockAuthService", content);
+        Assert.Contains("vi.fn()", content);
+        Assert.Contains("provide: AuthService, useValue: mockAuthService", content);
+        Assert.Contains("provideRouter([])", content);
+    }
+
+    [Fact]
+    public async Task GenerateTestFileAsync_ServiceWithCustomDeps_MocksCustomDeps()
+    {
+        // Arrange
+        var serviceFile = Path.Combine(_testDirectory, "order.service.ts");
+        File.WriteAllText(serviceFile, "// service");
+
+        var fileInfo = new TypeScriptFileInfo
+        {
+            FilePath = serviceFile,
+            FileName = "order.service",
+            FileType = TypeScriptFileType.Service,
+            ClassName = "OrderService",
+            ExistingTestFileCount = 0,
+            Dependencies = new List<string> { "HttpClient", "AuthService" }
+        };
+
+        var authServiceInfo = new TypeScriptFileInfo
+        {
+            FilePath = Path.Combine(_testDirectory, "auth.service.ts"),
+            FileName = "auth.service",
+            FileType = TypeScriptFileType.Service,
+            ClassName = "AuthService",
+            PublicMethods = new List<MethodInfo>
+            {
+                new() { Name = "getToken", ReturnType = "string" }
+            }
+        };
+        _service.SetDiscoveredFiles(new List<TypeScriptFileInfo> { fileInfo, authServiceInfo });
+
+        // Act
+        var testFilePath = await _service.GenerateTestFileAsync(fileInfo);
+
+        // Assert
+        var content = await File.ReadAllTextAsync(testFilePath!);
+        Assert.Contains("mockAuthService", content);
+        Assert.Contains("getToken: vi.fn()", content);
+        Assert.Contains("provide: AuthService, useValue: mockAuthService", content);
+        Assert.Contains("provideHttpClient()", content);
+        Assert.Contains("provideHttpClientTesting()", content);
+    }
+
+    [Fact]
+    public async Task GenerateTestFileAsync_FunctionalGuardWithDeps_MocksDeps()
+    {
+        // Arrange
+        var guardFile = Path.Combine(_testDirectory, "auth.guard.ts");
+        File.WriteAllText(guardFile, "// guard");
+
+        var fileInfo = new TypeScriptFileInfo
+        {
+            FilePath = guardFile,
+            FileName = "auth.guard",
+            FileType = TypeScriptFileType.Guard,
+            ClassName = "AuthGuard",
+            ExportName = "authGuard",
+            IsFunctional = true,
+            ExistingTestFileCount = 0,
+            Dependencies = new List<string> { "AuthService", "Router" }
+        };
+
+        var authServiceInfo = new TypeScriptFileInfo
+        {
+            FilePath = Path.Combine(_testDirectory, "auth.service.ts"),
+            FileName = "auth.service",
+            FileType = TypeScriptFileType.Service,
+            ClassName = "AuthService",
+            PublicMethods = new List<MethodInfo>
+            {
+                new() { Name = "hasValidToken", ReturnType = "boolean" }
+            }
+        };
+        _service.SetDiscoveredFiles(new List<TypeScriptFileInfo> { fileInfo, authServiceInfo });
+
+        // Act
+        var testFilePath = await _service.GenerateTestFileAsync(fileInfo);
+
+        // Assert
+        var content = await File.ReadAllTextAsync(testFilePath!);
+        Assert.Contains("mockAuthService", content);
+        Assert.Contains("hasValidToken: vi.fn()", content);
+        Assert.Contains("provide: AuthService, useValue: mockAuthService", content);
+        Assert.Contains("provideRouter([])", content);
+        Assert.Contains("runInInjectionContext", content);
+    }
+
+    [Fact]
+    public async Task GenerateTestFileAsync_GenericWithDeps_MocksAllDeps()
+    {
+        // Arrange
+        var file = Path.Combine(_testDirectory, "data.module.ts");
+        File.WriteAllText(file, "// module");
+
+        var fileInfo = new TypeScriptFileInfo
+        {
+            FilePath = file,
+            FileName = "data.module",
+            FileType = TypeScriptFileType.Module,
+            ClassName = "DataModule",
+            ExistingTestFileCount = 0,
+            Dependencies = new List<string> { "HttpClient", "AuthService" }
+        };
+
+        var authServiceInfo = new TypeScriptFileInfo
+        {
+            FilePath = Path.Combine(_testDirectory, "auth.service.ts"),
+            FileName = "auth.service",
+            FileType = TypeScriptFileType.Service,
+            ClassName = "AuthService",
+            PublicMethods = new List<MethodInfo>
+            {
+                new() { Name = "isLoggedIn", ReturnType = "boolean" }
+            }
+        };
+        _service.SetDiscoveredFiles(new List<TypeScriptFileInfo> { fileInfo, authServiceInfo });
+
+        // Act
+        var testFilePath = await _service.GenerateTestFileAsync(fileInfo);
+
+        // Assert
+        var content = await File.ReadAllTextAsync(testFilePath!);
+        Assert.Contains("TestBed", content);
+        Assert.Contains("mockAuthService", content);
+        Assert.Contains("isLoggedIn: vi.fn()", content);
+        Assert.Contains("provide: AuthService, useValue: mockAuthService", content);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_testDirectory))

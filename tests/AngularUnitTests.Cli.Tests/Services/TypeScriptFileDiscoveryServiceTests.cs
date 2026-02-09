@@ -124,6 +124,108 @@ public class TypeScriptFileDiscoveryServiceTests : IDisposable
         Assert.Equal(TypeScriptFileType.Guard, fileInfo.FileType);
     }
 
+    [Fact]
+    public async Task DiscoverTypeScriptFilesAsync_DetectsPrivateReadonlyConstructorDependency()
+    {
+        // Arrange
+        var serviceFile = Path.Combine(_testDirectory, "data.service.ts");
+        File.WriteAllText(serviceFile, @"
+import { Injectable } from '@angular/core';
+import { HttpClient } from '@angular/common/http';
+
+@Injectable({ providedIn: 'root' })
+export class DataService {
+    constructor(private readonly http: HttpClient) {}
+}");
+
+        // Act
+        var result = await _service.DiscoverTypeScriptFilesAsync(_testDirectory);
+
+        // Assert
+        var fileInfo = result.First();
+        Assert.Contains("HttpClient", fileInfo.Dependencies);
+    }
+
+    [Fact]
+    public async Task DiscoverTypeScriptFilesAsync_DetectsInjectWithOptions()
+    {
+        // Arrange
+        var serviceFile = Path.Combine(_testDirectory, "config.service.ts");
+        File.WriteAllText(serviceFile, @"
+import { Injectable, inject } from '@angular/core';
+import { HttpClient } from '@angular/common/http';
+import { ConfigService } from './config.service';
+
+@Injectable({ providedIn: 'root' })
+export class AppService {
+    private readonly http = inject(HttpClient);
+    private readonly config = inject(ConfigService, { optional: true });
+}");
+
+        // Act
+        var result = await _service.DiscoverTypeScriptFilesAsync(_testDirectory);
+
+        // Assert
+        var fileInfo = result.First();
+        Assert.Contains("HttpClient", fileInfo.Dependencies);
+        Assert.Contains("ConfigService", fileInfo.Dependencies);
+    }
+
+    [Fact]
+    public async Task DiscoverTypeScriptFilesAsync_DetectsInjectWithGenericType()
+    {
+        // Arrange
+        var guardFile = Path.Combine(_testDirectory, "role.guard.ts");
+        File.WriteAllText(guardFile, @"
+import { inject } from '@angular/core';
+import { CanActivateFn, Router } from '@angular/router';
+import { AuthService } from '../services/auth.service';
+
+export const roleGuard: CanActivateFn = (route, state) => {
+    const authService = inject<AuthService>(AuthService);
+    const router = inject(Router);
+    return true;
+};");
+
+        // Act
+        var result = await _service.DiscoverTypeScriptFilesAsync(_testDirectory);
+
+        // Assert
+        var fileInfo = result.First();
+        Assert.Contains("AuthService", fileInfo.Dependencies);
+        Assert.Contains("Router", fileInfo.Dependencies);
+    }
+
+    [Fact]
+    public async Task DiscoverTypeScriptFilesAsync_DetectsMultipleModifierCombinations()
+    {
+        // Arrange
+        var componentFile = Path.Combine(_testDirectory, "dashboard.component.ts");
+        File.WriteAllText(componentFile, @"
+import { Component } from '@angular/core';
+import { Router } from '@angular/router';
+import { AuthService } from '../services/auth.service';
+import { DataService } from '../services/data.service';
+
+@Component({ selector: 'app-dashboard', standalone: true, template: '' })
+export class DashboardComponent {
+    constructor(
+        private readonly authService: AuthService,
+        protected readonly dataService: DataService,
+        public router: Router
+    ) {}
+}");
+
+        // Act
+        var result = await _service.DiscoverTypeScriptFilesAsync(_testDirectory);
+
+        // Assert
+        var fileInfo = result.First();
+        Assert.Contains("AuthService", fileInfo.Dependencies);
+        Assert.Contains("DataService", fileInfo.Dependencies);
+        Assert.Contains("Router", fileInfo.Dependencies);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_testDirectory))
